@@ -379,23 +379,47 @@ if run is not None:
     if real is None:
         st.info("Enable 'Keep realisations' under Advanced to see per-bore distributions.")
     elif len(ok):
-        bid = st.selectbox("Bore", ok["ID"].tolist())
+        h1, h2 = st.columns([3, 1], vertical_alignment="bottom")
+        bid = h1.selectbox("Bore", ok["ID"].tolist())
+        hist_log = h2.checkbox("Log x", value=True, key="hist_log",
+                               help="CMB recharge distributions are strongly right-skewed because chloride is in the "
+                                    "denominator; a log axis shows their shape. The top 0.5% of realisations is trimmed.")
         idx = int(ok.loc[ok["ID"] == bid, "index"].iloc[0])
         r = res.iloc[idx]
-        vals = real[idx]; vals = vals[np.isfinite(vals)]
-        fh = go.Figure(go.Histogram(x=vals, nbinsx=60, name="CMB realisations",
-                                    marker=dict(color=C_CMB, line=dict(color="rgba(255,255,255,0.5)", width=1))))
-        for p, lab in ((r["R_RC_5_mm_y"], "5th"), (r["R_RC_50_mm_y"], "50th"), (r["R_RC_95_mm_y"], "95th")):
-            fh.add_vline(x=p, line=dict(color=C_LINE, width=1.5, dash="dot"),
-                         annotation_text=f"{lab} {p:.1f}", annotation_position="top")
-        if np.isfinite(r["RF_R50_mm_y"]):
-            fh.add_vline(x=r["RF_R50_mm_y"], line=dict(color=C_RF, width=2),
-                         annotation_text=f"RF R50 {r['RF_R50_mm_y']:.1f}", annotation_position="top right")
-        fh.update_layout(**PLOT_LAYOUT, xaxis_title="Recharge (mm/y)", yaxis_title="Count", height=420,
-                         xaxis_range=cap_range(vals, axis_cap, False),
+        vals = real[idx]; vals = vals[np.isfinite(vals) & (vals > 0)]
+        n_total = len(vals)
+        upper = min(float(np.percentile(vals, 99.5)), axis_cap)
+        shown = vals[vals <= upper]
+        if hist_log:
+            edges = np.logspace(np.log10(max(shown.min(), 1e-3)), np.log10(upper), 50)
+        else:
+            edges = np.linspace(0, upper, 50)
+        counts, edges = np.histogram(shown, bins=edges)
+        centres = np.sqrt(edges[:-1] * edges[1:]) if hist_log else 0.5 * (edges[:-1] + edges[1:])
+        fh = go.Figure(go.Bar(x=centres, y=counts, width=np.diff(edges), name="CMB realisations",
+                              marker=dict(color=C_CMB, line=dict(color="rgba(255,255,255,0.5)", width=0.5)),
+                              hovertemplate="%{x:.3g} mm/y: %{y} realisations<extra></extra>"))
+        ymax = counts.max() if counts.size else 1
+        marks = [(r["R_RC_5_mm_y"], "5th", C_LINE, "dot", 0.98), (r["R_RC_50_mm_y"], "50th", C_LINE, "dot", 0.90),
+                 (r["R_RC_95_mm_y"], "95th", C_LINE, "dot", 0.82)]
+        if np.isfinite(r["RF_R50_mm_y"]) and r["RF_R50_mm_y"] > 0:
+            marks.append((r["RF_R50_mm_y"], "RF R50", C_RF, "solid", 0.74))
+        for x, lab, colour, dash, yfrac in marks:
+            if x <= 0 or x > upper:
+                continue
+            fh.add_shape(type="line", x0=x, x1=x, y0=0, y1=ymax * 1.02, line=dict(color=colour, width=1.5, dash=dash))
+            fh.add_annotation(x=np.log10(x) if hist_log else x, y=yfrac, yref="paper", text=f"{lab} {x:.3g}",
+                              showarrow=False, xanchor="left", xshift=4, font=dict(size=11, color=colour))
+        fh.update_layout(**PLOT_LAYOUT, xaxis_title="Recharge (mm/y)", yaxis_title="Realisations", height=420,
+                         bargap=0.05, showlegend=False,
                          title=f"{bid}: Cl_gw {r['Clgw_mg_L']:.1f} mg/L, P {r['Rain_mm_y']:.0f} mm/y, "
                                f"RC {r['RC']:.3f}, deposition {r['ClDep_mean_kg_ha_y']:.1f} kg/ha/y")
+        fh.update_xaxes(type="log" if hist_log else "linear")
         st.plotly_chart(brand(fh), width="stretch")
+        trimmed = n_total - len(shown)
+        st.caption(f"{n_total} realisations; {trimmed} above {upper:.3g} mm/y not shown. Mean {r['R_RC_mean_mm_y']:.3g} mm/y, "
+                   f"median {r['R_RC_50_mm_y']:.3g} mm/y. The gap between them reflects the right tail that comes from "
+                   "low-chloride realisations.")
 
 # --------------------------------------------------------------------------- #
 # method and notes
@@ -449,5 +473,6 @@ with st.expander("Output columns"):
     st.table(pd.DataFrame({"column": list(COLUMN_NOTES), "meaning": list(COLUMN_NOTES.values())}))
 with st.expander("Warnings"):
     st.markdown("CMBEAR was named after the mighty Australian predator, the Drop Bear.\n\n"
-                "Remember, that unlike most Australians, drop bears don't like vegemite. "
-                "Ulike on your toast, the key is to spread Vegemite liberally to remain safe.")
+                "Remember, that unlike most Australians, drop bears don't like Vegemite. "
+                "To stay afe from drop bears, dab a little Vegemite behind each ear."
+                )
