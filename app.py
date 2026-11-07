@@ -1,4 +1,4 @@
-"""CMBEAR online: chloride mass balance recharge estimates for Australian bores."""
+"""CMBEAR online: Chloride mass balance Estimator of Australian Recharge."""
 from __future__ import annotations
 
 import io
@@ -86,11 +86,17 @@ st.markdown(
 
 with st.expander("**References**"):
     st.write(
+        "Crosbie, R.S., Rachakonda, P.K. (2021) Constraining probabilistic chloride mass-balance recharge estimates"
+        "using baseflow and remotely sensed evapotranspiration: the Cambrian Limestone Aquifer in northern Australia."
+        "Hydrogeology Journal, 29, 1399–1419. https://doi.org/10.1007/s10040-021-02323-1/"
         "Irvine, D.J., Cartwright, I. (2022). CMBEAR: Python-based recharge estimator using the chloride mass "
         "balance method in Australia. Groundwater, 60(3), 418-425. https://doi.org/10.1111/gwat.13161\n\n"
         "Lee, S., Irvine, D.J., Duvert, C., Rau, G.C., Cartwright, I. (2024). A high-resolution map of diffuse "
         "groundwater recharge rates for Australia. Hydrology and Earth System Sciences, 28, 1771-1790. "
         "https://doi.org/10.5194/hess-28-1771-2024\n\n"
+        "Wilkins, A., Crosbie, R., Louth-Robins, T., Davies, P. Raiber, M., Dawes, W., Gao, L. (2022)"
+        "Australian gridded chloride deposition-rate dataset. Data In Brief, 42, 108189."
+        "10.1016/j.dib.2022.108189/ \n\n"
         "Data and original scripts: https://www.hydroshare.org/resource/5e7b8bfcc1514680902f8ff43cc254b8/"
     )
 
@@ -98,6 +104,7 @@ with st.expander("**References**"):
 # 1. bore data
 # --------------------------------------------------------------------------- #
 st.header("1. Bore data")
+st.subheader("Requires the headers: ID,	Lat,	Lon,	Clgw,	Clgw_sd")
 col_up, col_tpl = st.columns([3, 1], vertical_alignment="bottom")
 upload = col_up.file_uploader("Bore spreadsheet (CSV or Excel)", type=["csv", "xlsx", "xls"])
 col_tpl.download_button("Download template", template_csv(), "cmbear_template.csv", "text/csv", width="stretch")
