@@ -112,13 +112,14 @@ with head_logo:
 
 st.markdown(
     "Upload a spreadsheet of bores with groundwater chloride concentrations and obtain recharge estimates "
-    "from the chloride mass balance (CMB) method. For each bore the app extracts chloride deposition, rainfall, "
-    "PET, aridity and runoff coefficient from national 0.05 degree grids, calculates the regular CMB recharge "
+    "from the chloride mass balance (CMB) method. For each bore, the app extracts chloride deposition, rainfall, "
+    "PET (Penman-Monteith), aridity and runoff coefficient from national 0.05 degree grids, calculates the regular CMB recharge "
     "and the stochastic CMBEAR2 recharge with a runoff term, and reads the matching values from the random "
     "forest recharge model of Lee et al. (2024).\n\n"
-    "Note: CMBEAR online only works for Australian bores.\n\n"
+    
     "Input: a CSV or Excel file with columns ID, Lat, Lon and Clgw (mg/L). Repeat samples under the same ID are "
     "averaged, and where there are three or more their standard deviation is used in place of the blanket CV.\n \n"
+    
     "Please cite as:\n\n"
     f"Irvine, D.J. ({thisyear}) CMBEAR online, https://cmbear-app.streamlit.app/ \n\n"
     "Lee, S., Irvine, D.J., Duvert, C., Rau, G.C., Cartwright, I. (2024). A high-resolution map of diffuse "
@@ -150,7 +151,7 @@ with st.expander("**References**"):
 # 1. bore data
 # --------------------------------------------------------------------------- #
 st.header("1. Bore data")
-st.subheader("Requires the headers: ID, Lat, Lon, Clgw, or download the template as a starting point.")
+st.markdown("Requires the headers: ID, Lat, Lon, Clgw, or download the template as a starting point.")
 col_up, col_tpl = st.columns([3, 1], vertical_alignment="bottom")
 upload = col_up.file_uploader("Bore spreadsheet (CSV or Excel)", type=["csv", "xlsx", "xls"])
 col_tpl.download_button("Download template", template_csv(), "cmbear_template.csv", "text/csv", width="stretch")
@@ -171,7 +172,7 @@ if upload is not None:
 # 2. settings
 # --------------------------------------------------------------------------- #
 st.header("2. Settings")
-st.subheader("Update any of the other optional parameters here.")
+st.markdown("Update any of the other optional parameters here.")
 c1, c2, c3 = st.columns(3)
 cv = c1.slider("Cl_gw coefficient of variation", 0.05, 1.00, 0.37, 0.01,
                help="Applied to groundwater chloride for bores with fewer than three samples. 0.37 is the national "
@@ -205,7 +206,7 @@ settings = CMBSettings(n_realisations=int(n_real), cv_clgw=cv, alpha_low=a_lo, a
 # 3. run
 # --------------------------------------------------------------------------- #
 st.header("3. Run")
-st.subheader("Not much to be said here. Click the button to run the analysis.")
+st.markdown("Not much to be said here. Click the button to run the analysis.")
 if bores is None:
     st.info("Upload a bore spreadsheet in section 1 to enable the run.")
 if st.button("Calculate recharge", type="primary", disabled=bores is None):
@@ -446,3 +447,7 @@ recharge (R5, R50, R95, mm/y) and recharge divided by rainfall (RP5, RP50, RP95)
 """)
 with st.expander("Output columns"):
     st.table(pd.DataFrame({"column": list(COLUMN_NOTES), "meaning": list(COLUMN_NOTES.values())}))
+with st.expander("Warnings"):
+    st.markdown("CMBEAR was named after the mighty Australian predator, the Drop Bear.\n\n"
+                "Remember, that unlike most Australians, drop bears don't like vegemite. "
+                "Ulike on your toast, the key is to spread Vegemite liberally to remain safe.")
