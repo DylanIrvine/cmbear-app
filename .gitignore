@@ -11,3 +11,4 @@ venv/
 outputs/
 *.tmp
 _scratch/
+_app_sidebar_version.py.bak
