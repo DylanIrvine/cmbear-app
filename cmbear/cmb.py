@@ -11,7 +11,7 @@ Cartwright, 2022) and CMBEAR2 (Lee et al., 2024):
        R = 100 * D * (1 - alpha * RC) / Cl_gw
    evaluated for n realisations in which
        D       ~ Pearson type III (mean, sd, skew from the deposition grids)
-       Cl_gw   ~ |Normal(Cl_gw, CV * Cl_gw)|  (or a user-supplied sd)
+       Cl_gw   ~ |Normal(Cl_gw, CV * Cl_gw)|  (or the SD of repeat samples when 3 or more exist)
        alpha   ~ Uniform(0.33, 0.66)
    and the 5th, 50th, 95th percentiles and mean are reported.
 
@@ -35,8 +35,7 @@ from .grids import GridStack
 class CMBSettings:
     n_realisations: int = 1000
     cv_clgw: float = 0.37            # blanket CV of groundwater chloride (Lee et al. 2024 national value 0.366)
-    use_bore_sd: bool = True         # use a user-supplied per-bore Clgw_sd instead of the blanket CV
-    min_samples_for_sd: int = 10     # use the SD of repeat samples only when a bore has at least this many
+    min_samples_for_sd: int = 3      # use the SD of repeat samples when a bore has at least this many; else the CV
     alpha_low: float = 0.33
     alpha_high: float = 0.66
     seed_deposition: int = 1
@@ -81,7 +80,7 @@ def _deviates(settings: CMBSettings):
 def run_cmbear(bores: pd.DataFrame, grids: GridStack, settings: CMBSettings | None = None):
     """Run the CMB calculations and extract random forest values for each bore.
 
-    bores: output of cmbear.inputs.parse_input (columns ID, Lat, Lon, Clgw, Clgw_sd, n_samples).
+    bores: output of cmbear.inputs.parse_input (columns ID, Lat, Lon, Clgw, Clgw_sd_samples, n_samples).
     Returns (results DataFrame, realisations ndarray or None).
     """
     s = settings or CMBSettings()
@@ -148,16 +147,11 @@ def run_cmbear(bores: pd.DataFrame, grids: GridStack, settings: CMBSettings | No
 
     def _col(name):
         return pd.to_numeric(b[name], errors="coerce").to_numpy(float) if name in b else np.full(nb, np.nan)
-    bore_sd, samp_sd = _col("Clgw_sd"), _col("Clgw_sd_samples")
-    nsamp = _col("n_samples")
-    sd_used = clgw * s.cv_clgw
-    sd_source = np.full(nb, "blanket CV", dtype=object)
-    if s.use_bore_sd:
-        # Priority: user-supplied SD, then SD of repeat samples if enough of them, then blanket CV
-        has_samp = np.isfinite(samp_sd) & (samp_sd > 0) & (nsamp >= s.min_samples_for_sd)
-        sd_used = np.where(has_samp, samp_sd, sd_used); sd_source[has_samp] = "repeat samples"
-        has_user = np.isfinite(bore_sd) & (bore_sd > 0)
-        sd_used = np.where(has_user, bore_sd, sd_used); sd_source[has_user] = "user Clgw_sd"
+    samp_sd, nsamp = _col("Clgw_sd_samples"), _col("n_samples")
+    # SD of repeat samples when there are enough of them, otherwise the blanket CV
+    has_samp = np.isfinite(samp_sd) & (samp_sd > 0) & (nsamp >= s.min_samples_for_sd)
+    sd_used = np.where(has_samp, samp_sd, clgw * s.cv_clgw)
+    sd_source = np.where(has_samp, "repeat samples", "blanket CV").astype(object)
     cv_used = sd_used / clgw
     clgw_dist = np.abs(clgw[:, None] + sd_used[:, None] * eps)         # (nb, n)
     rc = g["rc"][:, None]
@@ -201,10 +195,10 @@ def run_cmbear(bores: pd.DataFrame, grids: GridStack, settings: CMBSettings | No
 
 COLUMN_NOTES = {
     "Clgw_mg_L": "Groundwater chloride used (mean of repeat samples if any)",
-    "Clgw_sd_samples_mg_L": "Standard deviation of repeat samples at the bore (information only unless n is large)",
+    "Clgw_sd_samples_mg_L": "Standard deviation of repeat samples at the bore (blank for single samples)",
     "Clgw_sd_used_mg_L": "Standard deviation used for the Cl_gw distribution",
     "CV_used": "Coefficient of variation actually applied to Cl_gw",
-    "Clgw_sd_source": "Where the SD came from: user Clgw_sd, repeat samples, or the blanket CV",
+    "Clgw_sd_source": "Where the SD came from: repeat samples (3 or more) or the blanket CV",
     "pixel_row/pixel_col": "Indices of the 0.05 degree grid cell the bore fell in",
     "Rain_mm_y, PET_mm_y, Aridity, RC": "Climate and runoff coefficient at the pixel",
     "ClDep_*": "Chloride deposition statistics at the pixel (kg/ha/y)",

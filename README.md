@@ -1,11 +1,11 @@
-# CMBEAR app
+# CMBEAR online
 
 A Streamlit web app that estimates diffuse groundwater recharge for Australian bores with the
 chloride mass balance (CMB) method, and reads the matching values from the national random forest
 recharge grids of Lee et al. (2024).
 
-The user supplies a spreadsheet with four columns (**ID, Lat, Lon, Clgw** in mg/L; optional
-**Clgw_sd**). For each bore the app
+The user supplies a spreadsheet with four columns (**ID, Lat, Lon, Clgw** in mg/L). For each bore
+the app
 
 1. finds the 0.05 degree grid cell and extracts rainfall, PET, aridity, runoff coefficient and
    chloride deposition statistics (mean, 5th, 95th, sd, skew);
@@ -17,7 +17,7 @@ The user supplies a spreadsheet with four columns (**ID, Lat, Lon, Clgw** in mg/
    Australia inset, CMB vs RF, recharge vs climate, and the per-bore realisation histogram.
 
 Results reproduce `CMBEAR2_v1.0.py` to float32 precision for the same inputs (see
-`tests/` and the Method tab in the app for the documented differences).
+`tests/` and the Method and notes section of the app for the documented differences).
 
 ## Repository layout
 
@@ -63,21 +63,21 @@ lower-left corner 111.975 E, -44.025 S, NODATA -999) and stores that geometry in
 
 | Column   | Required | Meaning                                              |
 |----------|----------|------------------------------------------------------|
-| ID       | yes      | Bore or sample identifier. Repeat IDs are averaged.  |
+| ID       | yes      | Bore identifier. Rows sharing an ID are treated as repeat samples. |
 | Lat      | yes      | Latitude, decimal degrees (negative in Australia)    |
 | Lon      | yes      | Longitude, decimal degrees                           |
 | Clgw     | yes      | Groundwater chloride, mg/L                           |
-| Clgw_sd  | no       | Standard deviation of Clgw to use instead of the CV  |
 
 Column names are matched case-insensitively and common variants (latitude, longitude, chloride,
-bore_id, ...) are accepted. Censored values such as `<1` are dropped.
+bore_id, ...) are accepted; any other columns are ignored. Censored values such as `<1` are dropped.
+Repeat samples under one ID are averaged. Where an ID has three or more samples, their standard
+deviation is used for the groundwater chloride distribution; otherwise the CV setting below applies.
+The output records which rule applied to each bore (`Clgw_sd_source`).
 
 ## Settings
 
-- **Cl_gw coefficient of variation** (default 0.37): applied to every bore without its own SD.
-  0.37 is the national value Lee et al. (2024) derived from bores with more than 10 samples.
-- **Per-bore SD**: a `Clgw_sd` column always takes priority; the SD of repeat samples is used only
-  when a bore has at least the chosen minimum number of samples (default 10).
+- **Cl_gw coefficient of variation** (default 0.37): applied to every bore with fewer than three
+  samples. 0.37 is the national value Lee et al. (2024) derived from bores with more than 10 samples.
 - **Realisations**, **alpha range** and **seeds** reproduce the original defaults (1000, U(0.33, 0.66),
   seeds 1 / 3100 / 2).
 - **Cells without climate or RC data**: 1853 land cells (coastal fringe and islands, identified by having
@@ -119,7 +119,7 @@ https://doi.org/10.5194/hess-28-1771-2024
 
 Wilkins, A., Crosbie, R., Louth-Robins, T., Davies, P., Raiber, M., Dawes, W., Gao, L. (2022) Australian
 gridded chloride deposition-rate dataset. *Data in Brief*, 42, 108189. 
-https://doi.org/10.1016/j.dib.2022.1081892352-3409
+https://doi.org/10.1016/j.dib.2022.108189
 
 ## Citation and licence
 

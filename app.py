@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -20,9 +21,10 @@ BADGE, FAVICON = LOGO_DIR / "cmbear_badge.png", LOGO_DIR / "favicon.png"
 
 st.set_page_config(page_title="CMBEAR online", page_icon=str(FAVICON) if FAVICON.exists() else ":droplet:")
 
-# One hue per series, fixed assignment. Backgrounds and fonts follow the Streamlit theme.
-C_CMB, C_RF, C_LINE = "#4a90c2", "#e0812b", "#9a9a9a"
-PLOT_LAYOUT = dict(font=dict(size=13), margin=dict(l=60, r=20, t=50, b=55))
+# Default plot colours (users can override with their own hex codes under Plot colours).
+DEFAULT_COLOURS = {"primary": "#4a90c2", "secondary": "#e0812b", "reference": "#9a9a9a"}
+PLOT_LAYOUT = dict(font=dict(size=13), margin=dict(l=60, r=20, t=50, b=70))
+ATTRIBUTION = "Produced using CMBEAR online - Dylan Irvine"
 FILL_LABELS = {"Mean of neighbouring cells": "neighbours", "Assume RC value, leave climate blank": "assume_rc",
                "Leave blank": "none"}
 
@@ -39,7 +41,6 @@ def template_csv() -> bytes:
         "Lat": [-12.4512, -14.6300, -23.7000],
         "Lon": [130.9820, 132.2000, 133.8700],
         "Clgw": [12.5, 48.0, 310.0],
-        "Clgw_sd": [np.nan, 9.5, np.nan],
     }).to_csv(index=False).encode()
 
 
@@ -62,6 +63,39 @@ def marker(color):
     return dict(color=color, size=8, opacity=0.8, line=dict(width=1, color="rgba(255,255,255,0.6)"))
 
 
+def brand(fig):
+    """Small, light attribution line a few pixels above the figure's bottom edge, outside the plot area,
+    so it sits in the margin and can be cropped off. Position is in pixels so it is independent of height."""
+    b = (fig.layout.margin.b if fig.layout.margin and fig.layout.margin.b is not None else 70)
+    fig.add_annotation(text=ATTRIBUTION, xref="paper", yref="paper", x=1.0, y=0, xanchor="right",
+                       yanchor="bottom", yshift=-(b - 4), showarrow=False,
+                       font=dict(size=9, color="rgba(140,140,140,0.55)"))
+    return fig
+
+
+def cap_range(values, cap, log, lower_floor=1e-3):
+    """Axis range [lo, hi] with hi capped at `cap`; in log10 units when log is True."""
+    v = np.asarray(values, float); v = v[np.isfinite(v)]
+    if log:
+        v = v[v > 0]
+    if v.size == 0:
+        return None
+    lo, hi = float(v.min()), min(float(v.max()), float(cap))
+    if hi <= lo:
+        hi = lo * 1.5 if log else lo + 1
+    if log:
+        lo = max(lo, lower_floor)
+        return [np.log10(lo) - 0.1, np.log10(hi) + 0.05]
+    return [0 if lo >= 0 else lo * 1.05, hi * 1.05]
+
+
+def valid_hex(text, fallback):
+    text = (text or "").strip()
+    if not text.startswith("#"):
+        text = "#" + text
+    return text if re.fullmatch(r"#[0-9a-fA-F]{6}", text) else fallback
+
+
 # --------------------------------------------------------------------------- #
 # header
 # --------------------------------------------------------------------------- #
@@ -69,7 +103,7 @@ head_text, head_logo = st.columns([3, 1], vertical_alignment="center")
 with head_text:
     st.title("CMBEAR online")
     st.subheader("Chloride Mass Balance Estimator Australian Recharge")
-    st.write("Dylan Irvine and Stephen Lee, Charles Darwin University.\n\n")
+    st.write("Dylan Irvine, Charles Darwin University.\n\n")
 with head_logo:
     if BADGE.exists():
         st.image(str(BADGE), width="stretch")
@@ -81,30 +115,39 @@ st.markdown(
     "and the stochastic CMBEAR2 recharge with a runoff term, and reads the matching values from the random "
     "forest recharge model of Lee et al. (2024).\n\n"
     "Note: CMBEAR online only works for Australian bores.\n\n"
-    "Input: a CSV or Excel file with columns ID, Lat, Lon and Clgw (mg/L); optional Clgw_sd."
+    "Input: a CSV or Excel file with columns ID, Lat, Lon and Clgw (mg/L). Repeat samples under the same ID are "
+    "averaged, and where there are three or more their standard deviation is used in place of the blanket CV.\n \n"
+    "Please cite the Lee et al. (2024) paper:\n\n"
+    "Lee, S., Irvine, D.J., Duvert, C., Rau, G.C., Cartwright, I. (2024). A high-resolution map of diffuse "
+    "groundwater recharge rates for Australia. Hydrology and Earth System Sciences, 28, 1771-1790. "
+    "https://doi.org/10.5194/hess-28-1771-2024\n\n"
+    "Other references to consider are in the dropdown below."
 )
 
 with st.expander("**References**"):
     st.write(
+        "Stochastic CMB equations orginally from:\n\n"
         "Crosbie, R.S., Rachakonda, P.K. (2021) Constraining probabilistic chloride mass-balance recharge estimates"
         "using baseflow and remotely sensed evapotranspiration: the Cambrian Limestone Aquifer in northern Australia."
-        "Hydrogeology Journal, 29, 1399–1419. https://doi.org/10.1007/s10040-021-02323-1/"
+        "Hydrogeology Journal, 29, 1399–1419. https://doi.org/10.1007/s10040-021-02323-1/ \n\n"
+        "First implementation of CMBEAR:\n\n"
         "Irvine, D.J., Cartwright, I. (2022). CMBEAR: Python-based recharge estimator using the chloride mass "
         "balance method in Australia. Groundwater, 60(3), 418-425. https://doi.org/10.1111/gwat.13161\n\n"
+        "Implementation of CMBEAR2:\n\n"
         "Lee, S., Irvine, D.J., Duvert, C., Rau, G.C., Cartwright, I. (2024). A high-resolution map of diffuse "
         "groundwater recharge rates for Australia. Hydrology and Earth System Sciences, 28, 1771-1790. "
         "https://doi.org/10.5194/hess-28-1771-2024\n\n"
+        "Chloride deposition maps (original reference):\n\n"
         "Wilkins, A., Crosbie, R., Louth-Robins, T., Davies, P. Raiber, M., Dawes, W., Gao, L. (2022)"
         "Australian gridded chloride deposition-rate dataset. Data In Brief, 42, 108189."
         "10.1016/j.dib.2022.108189/ \n\n"
-        "Data and original scripts: https://www.hydroshare.org/resource/5e7b8bfcc1514680902f8ff43cc254b8/"
     )
 
 # --------------------------------------------------------------------------- #
 # 1. bore data
 # --------------------------------------------------------------------------- #
 st.header("1. Bore data")
-st.subheader("Requires the headers: ID,	Lat,	Lon,	Clgw,	Clgw_sd")
+st.subheader("Requires the headers: ID, Lat, Lon, Clgw, or download the template as a starting point.")
 col_up, col_tpl = st.columns([3, 1], vertical_alignment="bottom")
 upload = col_up.file_uploader("Bore spreadsheet (CSV or Excel)", type=["csv", "xlsx", "xls"])
 col_tpl.download_button("Download template", template_csv(), "cmbear_template.csv", "text/csv", width="stretch")
@@ -125,19 +168,14 @@ if upload is not None:
 # 2. settings
 # --------------------------------------------------------------------------- #
 st.header("2. Settings")
+st.subheader("Update any of the other optional parameters here.")
 c1, c2, c3 = st.columns(3)
 cv = c1.slider("Cl_gw coefficient of variation", 0.05, 1.00, 0.37, 0.01,
-               help="Blanket CV applied to groundwater chloride. 0.37 is the national value derived from bores "
-                    "with more than 10 samples in Lee et al. (2024).")
+               help="Applied to groundwater chloride for bores with fewer than three samples. 0.37 is the national "
+                    "value derived from bores with more than 10 samples in Lee et al. (2024).")
 n_real = c2.select_slider("Realisations per bore", [250, 500, 1000, 2000, 5000], value=1000)
 a_lo, a_hi = c3.slider("Runoff factor alpha range", 0.0, 1.0, (0.33, 0.66), 0.01,
                        help="Fraction of the runoff coefficient that removes chloride. Lee et al. used U(0.33, 0.66).")
-c4, c5 = st.columns(2)
-use_sd = c4.checkbox("Use per-bore SD where available", value=True,
-                     help="A user-supplied Clgw_sd column always takes priority. Otherwise the SD of repeat samples "
-                          "is used if the bore has at least the number of samples set alongside.")
-min_n = c5.number_input("Minimum repeat samples to use their SD", 2, 100, 10, 1)
-
 with st.expander("Cells without climate or RC data"):
     st.caption("1853 coastal and island cells have chloride deposition but no rainfall, PET, aridity or runoff "
                "coefficient; 6400 land cells have no random forest value.")
@@ -156,8 +194,7 @@ with st.expander("Advanced"):
     seed_a = s3.number_input("Seed (alpha)", value=2, step=1)
     keep_real = st.checkbox("Keep realisations (needed for the histogram and Excel export)", value=True)
 
-settings = CMBSettings(n_realisations=int(n_real), cv_clgw=cv, use_bore_sd=use_sd, min_samples_for_sd=int(min_n),
-                       alpha_low=a_lo, alpha_high=a_hi, seed_deposition=int(seed_d), seed_clgw=int(seed_c),
+settings = CMBSettings(n_realisations=int(n_real), cv_clgw=cv, alpha_low=a_lo, alpha_high=a_hi, seed_deposition=int(seed_d), seed_clgw=int(seed_c),
                        seed_alpha=int(seed_a), keep_realisations=keep_real, fill_method=FILL_LABELS[fill_method],
                        fill_max_cells=int(fill_max), fill_rc_value=float(fill_rc), fill_rf=fill_rf)
 
@@ -165,6 +202,7 @@ settings = CMBSettings(n_realisations=int(n_real), cv_clgw=cv, use_bore_sd=use_s
 # 3. run
 # --------------------------------------------------------------------------- #
 st.header("3. Run")
+st.subheader("Not much to be said here. Click the button to run the analysis.")
 if bores is None:
     st.info("Upload a bore spreadsheet in section 1 to enable the run.")
 if st.button("Calculate recharge", type="primary", disabled=bores is None):
@@ -214,6 +252,61 @@ if run is not None:
     st.header("5. Plots")
     ok = ok_all.reset_index()
 
+    with st.expander("Plot colours"):
+        st.caption("Enter hex codes (for example your organisation's colours). Primary is used for CMB results, "
+                   "secondary for random forest values, reference for 1:1 lines and percentile markers.")
+        pc1, pc2, pc3 = st.columns(3)
+        C_CMB = valid_hex(pc1.text_input("Primary", DEFAULT_COLOURS["primary"]), DEFAULT_COLOURS["primary"])
+        C_RF = valid_hex(pc2.text_input("Secondary", DEFAULT_COLOURS["secondary"]), DEFAULT_COLOURS["secondary"])
+        C_LINE = valid_hex(pc3.text_input("Reference", DEFAULT_COLOURS["reference"]), DEFAULT_COLOURS["reference"])
+        sw1, sw2, sw3 = st.columns(3)
+        for col, c in zip((sw1, sw2, sw3), (C_CMB, C_RF, C_LINE)):
+            col.markdown(f'<div style="background:{c};height:14px;border-radius:3px"></div>', unsafe_allow_html=True)
+
+    with st.expander("Advanced plot options"):
+        axis_cap = st.number_input("Maximum recharge shown on axes (mm/y)", 10.0, 100000.0, 2000.0, 100.0,
+                                   help="Axes showing recharge are limited to this value. Larger estimates, usually "
+                                        "from very low chloride, are clipped from view but remain in the results.")
+        show_ids = st.checkbox("Label markers with bore IDs", value=False,
+                               help="Adds the ID beside each marker on the map and scatter plots. Best for small "
+                                    "numbers of bores; labels can overlap when many are plotted.")
+    label_mode = "markers+text" if show_ids else "markers"
+    label_font = dict(size=10)
+
+    st.subheader("Recharge by bore")
+    b1, b2, b3 = st.columns([2, 2, 1], vertical_alignment="bottom")
+    bar_est = b1.selectbox("Estimate", ["Stochastic CMB (R_RC)", "Regular CMB (R_CMB)", "Random forest (RF)"],
+                           key="bar_est")
+    bar_sort = b2.selectbox("Order", ["Input order", "Recharge, descending", "Rainfall, ascending"], key="bar_sort")
+    bar_log = b3.checkbox("Log y", value=False, key="bar_log")
+    centre, lo_col, hi_col = {
+        "Stochastic CMB (R_RC)": ("R_RC_50_mm_y", "R_RC_5_mm_y", "R_RC_95_mm_y"),
+        "Regular CMB (R_CMB)": ("R_CMB_mean_mm_y", "R_CMB_5_mm_y", "R_CMB_95_mm_y"),
+        "Random forest (RF)": ("RF_R50_mm_y", "RF_R5_mm_y", "RF_R95_mm_y"),
+    }[bar_est]
+    bd = ok.dropna(subset=[centre])
+    if bar_sort == "Recharge, descending":
+        bd = bd.sort_values(centre, ascending=False)
+    elif bar_sort == "Rainfall, ascending":
+        bd = bd.sort_values("Rain_mm_y")
+    fb = go.Figure(go.Bar(
+        x=bd["ID"].astype(str), y=bd[centre], name=bar_est, marker=dict(color=C_CMB, line=dict(color=C_LINE, width=0.5)),
+        error_y=dict(type="data", symmetric=False, array=bd[hi_col] - bd[centre], arrayminus=bd[centre] - bd[lo_col],
+                     color=C_LINE, thickness=1.2, width=4),
+        customdata=np.stack([bd[lo_col], bd[hi_col], bd["Rain_mm_y"]], axis=1),
+        hovertemplate="<b>%{x}</b><br>%{y:.2f} mm/y (5th %{customdata[0]:.2f}, 95th %{customdata[1]:.2f})"
+                      "<br>Rain %{customdata[2]:.0f} mm/y<extra></extra>"))
+    label_px = min(220, 20 + 7 * int(bd["ID"].astype(str).str.len().max() if len(bd) else 6))
+    fb.update_layout(**{**PLOT_LAYOUT, "margin": dict(l=60, r=20, t=50, b=label_px + 50)},
+                     xaxis_title="Bore", yaxis_title="Recharge (mm/y)", bargap=0.35, height=440 + label_px,
+                     xaxis=dict(type="category", tickangle=-90, automargin=False))
+    fb.update_yaxes(type="log" if bar_log else "linear", range=cap_range(bd[[lo_col, hi_col]].to_numpy().ravel(), axis_cap, bar_log))
+    st.plotly_chart(brand(fb), width="stretch")
+    st.caption("Bars: median (stochastic CMB, random forest) or mean (regular CMB). Whiskers: 5th to 95th percentile. "
+               "Whiskers that would cross zero on a log axis are truncated by the axis.")
+    if len(bd) > 80:
+        st.caption(f"{len(bd)} bores plotted; labels may overlap. Use the plot's zoom, or sort and read the hover text.")
+
     st.subheader("Bore map")
     m1, m2, m3 = st.columns([2, 2, 1], vertical_alignment="bottom")
     cvar = m1.selectbox("Colour bores by", ["R_RC_50_mm_y", "R_CMB_mean_mm_y", "RF_R50_mm_y", "RP_RC_50",
@@ -223,7 +316,8 @@ if run is not None:
     bgkey = {"Random forest R50": "rf_r50", "Rainfall": "rain", "Land only": None}[bgopt]
     with_coords = res[np.isfinite(res["Lat"]) & np.isfinite(res["Lon"])]
     if len(with_coords):
-        st.plotly_chart(bore_map(with_coords, grids(), cvar, cvar, bgkey, logc), width="stretch")
+        st.plotly_chart(brand(bore_map(with_coords, grids(), cvar, cvar, bgkey, logc, point_colour=C_CMB, show_ids=show_ids)),
+                        width="stretch")
         st.caption("Main panel: bores over the chosen grid (greys, darker is higher). Inset: Australia with the "
                    "main panel's extent outlined. Bores without a result are still plotted; hover for status.")
 
@@ -232,8 +326,8 @@ if run is not None:
     d = ok[ok["RF_R50_mm_y"].notna()]
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=d["RF_R50_mm_y"], y=d["R_RC_50_mm_y"], mode="markers", name="Bores (R50, bars 5th to 95th)",
-        marker=marker(C_CMB),
+        x=d["RF_R50_mm_y"], y=d["R_RC_50_mm_y"], mode=label_mode, name="Bores (R50, bars 5th to 95th)",
+        marker=marker(C_CMB), text=d["ID"].astype(str), textposition="top right", textfont=label_font,
         error_y=dict(type="data", symmetric=False, array=d["R_RC_95_mm_y"] - d["R_RC_50_mm_y"],
                      arrayminus=d["R_RC_50_mm_y"] - d["R_RC_5_mm_y"], color=C_CMB, thickness=1, width=0),
         error_x=dict(type="data", symmetric=False, array=d["RF_R95_mm_y"] - d["RF_R50_mm_y"],
@@ -243,15 +337,17 @@ if run is not None:
                       "<br>Cl_gw %{customdata[1]:.1f} mg/L<br>Rain %{customdata[2]:.0f} mm/y<extra></extra>"))
     if len(d):
         lo = max(1e-3, float(np.nanmin([d["RF_R5_mm_y"].min(), d["R_RC_5_mm_y"].min()])) * 0.8)
-        hi = float(np.nanmax([d["RF_R95_mm_y"].max(), d["R_RC_95_mm_y"].max()])) * 1.2
+        hi = min(axis_cap, float(np.nanmax([d["RF_R95_mm_y"].max(), d["R_RC_95_mm_y"].max()])) * 1.2)
         fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="1:1",
                                  line=dict(color=C_LINE, width=1.5, dash="dash")))
-    fig.update_layout(**PLOT_LAYOUT, xaxis_title="Random forest median recharge (mm/y)",
+    fig.update_layout(**PLOT_LAYOUT, xaxis_title="Random forest median recharge (mm/y)\n (Lee et al. (2024)",
                       yaxis_title="Stochastic CMB median recharge (mm/y)", height=520,
                       legend=dict(orientation="h", y=1.08))
-    if logax:
-        fig.update_xaxes(type="log"); fig.update_yaxes(type="log")
-    st.plotly_chart(fig, width="stretch")
+    both = d[["RF_R5_mm_y", "RF_R95_mm_y", "R_RC_5_mm_y", "R_RC_95_mm_y"]].to_numpy().ravel()
+    rng = cap_range(both, axis_cap, logax)
+    fig.update_xaxes(type="log" if logax else "linear", range=rng)
+    fig.update_yaxes(type="log" if logax else "linear", range=rng)
+    st.plotly_chart(brand(fig), width="stretch")
     st.caption("Vertical bars: 5th to 95th percentile of the CMB realisations at the bore. Horizontal bars: "
                "5th to 95th percentile random forest grids at the same pixel. The RF model was trained on CMB "
                "estimates of this kind, so agreement is expected on average but not bore by bore.")
@@ -261,17 +357,19 @@ if run is not None:
                      horizontal=True)
     ycol = {"Stochastic CMB (R_RC_50)": "R_RC_50_mm_y", "Regular CMB (R_CMB_mean)": "R_CMB_mean_mm_y",
             "Random forest (RF_R50)": "RF_R50_mm_y"}[which]
-    f1 = go.Figure(go.Scatter(x=ok["Rain_mm_y"], y=ok[ycol], mode="markers", name=which, marker=marker(C_CMB),
-                              text=ok["ID"], hovertemplate="<b>%{text}</b><br>P %{x:.0f} mm/y<br>R %{y:.2f} mm/y<extra></extra>"))
+    f1 = go.Figure(go.Scatter(x=ok["Rain_mm_y"], y=ok[ycol], mode=label_mode, name=which, marker=marker(C_CMB),
+                              text=ok["ID"].astype(str), textposition="top right", textfont=label_font, hovertemplate="<b>%{text}</b><br>P %{x:.0f} mm/y<br>R %{y:.2f} mm/y<extra></extra>"))
     f1.update_layout(**PLOT_LAYOUT, xaxis_title="Mean annual rainfall (mm/y)", yaxis_title="Recharge (mm/y)",
-                     yaxis_type="log", height=420, title="Recharge versus rainfall")
-    f2 = go.Figure(go.Scatter(x=ok["Aridity"], y=ok[ycol] / ok["Rain_mm_y"], mode="markers", name=which,
-                              marker=marker(C_CMB), text=ok["ID"],
+                     yaxis_type="log", height=420, title="Recharge versus rainfall",
+                     yaxis_range=cap_range(ok[ycol], axis_cap, True))
+    f2 = go.Figure(go.Scatter(x=ok["Aridity"], y=ok[ycol] / ok["Rain_mm_y"], mode=label_mode, name=which,
+                              marker=marker(C_CMB), text=ok["ID"].astype(str), textposition="top right",
+                              textfont=label_font,
                               hovertemplate="<b>%{text}</b><br>PET/P %{x:.2f}<br>R/P %{y:.3f}<extra></extra>"))
     f2.update_layout(**PLOT_LAYOUT, xaxis_title="Aridity index (PET/P)", yaxis_title="Recharge / rainfall",
                      yaxis_type="log", xaxis_type="log", height=420, title="Recharge ratio versus aridity")
-    st.plotly_chart(f1, width="stretch")
-    st.plotly_chart(f2, width="stretch")
+    st.plotly_chart(brand(f1), width="stretch")
+    st.plotly_chart(brand(f2), width="stretch")
 
     st.subheader("Recharge distribution for one bore")
     if real is None:
@@ -290,9 +388,10 @@ if run is not None:
             fh.add_vline(x=r["RF_R50_mm_y"], line=dict(color=C_RF, width=2),
                          annotation_text=f"RF R50 {r['RF_R50_mm_y']:.1f}", annotation_position="top right")
         fh.update_layout(**PLOT_LAYOUT, xaxis_title="Recharge (mm/y)", yaxis_title="Count", height=420,
+                         xaxis_range=cap_range(vals, axis_cap, False),
                          title=f"{bid}: Cl_gw {r['Clgw_mg_L']:.1f} mg/L, P {r['Rain_mm_y']:.0f} mm/y, "
                                f"RC {r['RC']:.3f}, deposition {r['ClDep_mean_kg_ha_y']:.1f} kg/ha/y")
-        st.plotly_chart(fh, width="stretch")
+        st.plotly_chart(brand(fh), width="stretch")
 
 # --------------------------------------------------------------------------- #
 # method and notes
@@ -324,9 +423,11 @@ recharge (R5, R50, R95, mm/y) and recharge divided by rainfall (RP5, RP50, RP95)
 
 **Differences from the original CMBEAR2_v1.0.py script**
 
-- Input is reduced to ID, Lat, Lon, Clgw (optional Clgw_sd). Repeat samples per ID are averaged.
-- The blanket CV of groundwater chloride is a user setting (default 0.37) rather than being derived from
-  bores with more than 10 samples in the input file. 0.37 reproduces the national analysis.
+- Input is reduced to ID, Lat, Lon, Clgw. Repeat samples per ID are averaged; with three or more samples
+  their standard deviation is used for the Cl_gw distribution.
+- For bores with fewer than three samples the CV of groundwater chloride is a user setting (default 0.37)
+  rather than being derived from bores with more than 10 samples in the input file. 0.37 reproduces the
+  national analysis.
 - The regular CMB upper bound now uses the 95th percentile deposition grid. The original read the 5th
   percentile file for both bounds, so its `Recharge 95%` column equalled `Recharge 5%`.
 - The runoff coefficient NODATA value (-999) is treated as missing. The original did not replace it, so a

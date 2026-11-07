@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from .grids import GridStack
 
 GREYS = [[0, "#f7f7f7"], [1, "#8c8c8c"]]          # muted background ramp (land data)
-SEQ = "Oranges"                                   # single-hue ramp for the bore colour variable
+DEFAULT_POINT = "#e0812b"                         # end colour of the single-hue ramp for the bore colour variable
 OCEAN = "#dfe9f3"
 
 
@@ -18,7 +18,8 @@ def _downsample(arr: np.ndarray, max_n: int):
 
 
 def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label: str,
-             background: str | None = "rf_r50", log_colour: bool = True, pad_frac: float = 0.15) -> go.Figure:
+             background: str | None = "rf_r50", log_colour: bool = True, pad_frac: float = 0.15,
+             point_colour: str = DEFAULT_POINT, show_ids: bool = False) -> go.Figure:
     """Map of bores coloured by one result column over a muted grid, with an Australia inset.
 
     background: key of a grid to show in greys (None for land/sea only).
@@ -58,8 +59,10 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
         tv = np.arange(lo, hi + 1)
         tick = dict(tickvals=tv, ticktext=[f"{10**t:g}" for t in tv])
     fig.add_trace(go.Scatter(
-        x=ok["Lon"], y=ok["Lat"], mode="markers", name="Bores",
-        marker=dict(color=cvals, colorscale=SEQ, size=9, line=dict(width=1, color="#333333"),
+        x=ok["Lon"], y=ok["Lat"], mode="markers+text" if show_ids else "markers", name="Bores",
+        text=ok["ID"].astype(str), textposition="top right", textfont=dict(size=10, color="#222222"),
+        marker=dict(color=cvals, colorscale=[[0, "#fbf3ea"], [1, point_colour]], size=9,
+                    line=dict(width=1, color="#333333"),
                     colorbar=dict(title=colour_label, x=0.76, xanchor="left", len=0.5, y=0.27, **(tick or {}))),
         customdata=np.stack([ok["ID"], vals, ok["status"]], axis=1),
         hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]:.3g}<br>lat %{y:.4f}, lon %{x:.4f}"
@@ -80,7 +83,7 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
 
     mid_lat = np.deg2rad((y0 + y1) / 2)
     fig.update_layout(
-        template="simple_white", height=620, margin=dict(l=60, r=20, t=40, b=50),
+        template="simple_white", height=620, margin=dict(l=60, r=20, t=40, b=70),
         plot_bgcolor=OCEAN, showlegend=False,
         xaxis=dict(title="Longitude", range=[x0, x1], constrain="domain", domain=[0, 0.72]),
         yaxis=dict(title="Latitude", range=[y0, y1], scaleanchor="x", scaleratio=1 / np.cos(mid_lat)),
