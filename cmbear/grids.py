@@ -13,7 +13,7 @@ DEFAULT_GRID_PATH = Path(__file__).resolve().parent.parent / "data" / "grids.npz
 GRID_INFO = {
     "rain":     ("Long-term mean annual rainfall", "mm/y"),
     "pet":      ("Long-term mean annual potential evapotranspiration", "mm/y"),
-    "aridity":  ("Aridity index (PET/P)", "-"),
+    "aridity":  ("Aridity index (P/PET; lower is drier)", "-"),
     "rc":       ("Mean annual runoff coefficient", "-"),
     "cld_mean": ("Chloride deposition, mean", "kg/ha/y"),
     "cld_5th":  ("Chloride deposition, 5th percentile", "kg/ha/y"),

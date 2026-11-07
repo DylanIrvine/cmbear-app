@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from cmbear import CMBSettings, load_grids, parse_input, run_cmbear
+from cmbear import run_counter
 from cmbear.cmb import COLUMN_NOTES
 from cmbear.inputs import read_table
 from cmbear.plotting import bore_map
@@ -91,6 +92,25 @@ def cap_range(values, cap, log, lower_floor=1e-3):
     return [0 if lo >= 0 else lo * 1.05, hi * 1.05]
 
 
+def log_ticks(fig, axis, values=None, rng=None):
+    """Label a log axis at 1, 2, 5 per decade (decades only if that would crowd) instead of plotly's bare digits.
+
+    axis: "x" or "y". Pass the data (values) or a log10 range (rng) to determine the span.
+    """
+    if rng is None:
+        v = np.asarray(values, float); v = v[np.isfinite(v) & (v > 0)]
+        if v.size == 0:
+            return
+        rng = [np.log10(v.min()), np.log10(v.max())]
+    lo, hi = 10 ** rng[0], 10 ** rng[1]
+    k0, k1 = int(np.floor(rng[0])), int(np.ceil(rng[1]))
+    span = rng[1] - rng[0]
+    mults = (1,) if span > 4 else (1, 2, 5) if span > 1.2 else (1, 1.5, 2, 3, 4, 5, 6, 8)
+    vals = [m * 10.0 ** k for k in range(k0, k1 + 1) for m in mults if lo * 0.999 <= m * 10.0 ** k <= hi * 1.001]
+    text = [f"{t:g}" for t in vals]
+    (fig.update_xaxes if axis == "x" else fig.update_yaxes)(tickvals=vals, ticktext=text, minor=dict(ticks=""))
+
+
 def valid_hex(text, fallback):
     text = (text or "").strip()
     if not text.startswith("#"):
@@ -127,6 +147,12 @@ st.markdown(
     "https://doi.org/10.5194/hess-28-1771-2024\n\n"
     "Other references to consider are in the dropdown below."
 )
+
+# Shared run counter. Read once per session; shows nothing if not configured.
+if "run_count" not in st.session_state:
+    st.session_state["run_count"] = run_counter.get_runs()
+if st.session_state["run_count"] is not None:
+    st.caption(f"This tool has been run {st.session_state['run_count']:,} times.")
 
 with st.expander("**References**"):
     st.write(
@@ -212,6 +238,9 @@ if bores is None:
 if st.button("Calculate recharge", type="primary", disabled=bores is None):
     res, real = run_cmbear(bores, grids(), settings)
     st.session_state["run"] = dict(res=res, real=real, settings=settings, msgs=msgs, file=upload.name)
+    new_total = run_counter.increment_runs()
+    if new_total is not None:
+        st.session_state["run_count"] = new_total
 
 run = st.session_state.get("run")
 if run is not None:
@@ -304,7 +333,10 @@ if run is not None:
     fb.update_layout(**{**PLOT_LAYOUT, "margin": dict(l=60, r=20, t=50, b=label_px + 50)},
                      xaxis_title="Bore", yaxis_title="Recharge (mm/y)", bargap=0.35, height=440 + label_px,
                      xaxis=dict(type="category", tickangle=-90, automargin=False))
-    fb.update_yaxes(type="log" if bar_log else "linear", range=cap_range(bd[[lo_col, hi_col]].to_numpy().ravel(), axis_cap, bar_log))
+    bar_rng = cap_range(bd[[lo_col, hi_col]].to_numpy().ravel(), axis_cap, bar_log)
+    fb.update_yaxes(type="log" if bar_log else "linear", range=bar_rng)
+    if bar_log and bar_rng:
+        log_ticks(fb, "y", rng=bar_rng)
     st.plotly_chart(brand(fb), width="stretch")
     st.caption("Bars: median (stochastic CMB, random forest) or mean (regular CMB). Whiskers: 5th to 95th percentile. "
                "Whiskers that would cross zero on a log axis are truncated by the axis.")
@@ -351,6 +383,8 @@ if run is not None:
     rng = cap_range(both, axis_cap, logax)
     fig.update_xaxes(type="log" if logax else "linear", range=rng)
     fig.update_yaxes(type="log" if logax else "linear", range=rng)
+    if logax and rng:
+        log_ticks(fig, "x", rng=rng); log_ticks(fig, "y", rng=rng)
     st.plotly_chart(brand(fig), width="stretch")
     st.caption("Vertical bars: 5th to 95th percentile of the CMB realisations at the bore. Horizontal bars: "
                "5th to 95th percentile random forest grids at the same pixel. The RF model was trained on CMB "
@@ -369,9 +403,13 @@ if run is not None:
     f2 = go.Figure(go.Scatter(x=ok["Aridity"], y=ok[ycol] / ok["Rain_mm_y"], mode=label_mode, name=which,
                               marker=marker(C_CMB), text=ok["ID"].astype(str), textposition="top right",
                               textfont=label_font,
-                              hovertemplate="<b>%{text}</b><br>PET/P %{x:.2f}<br>R/P %{y:.3f}<extra></extra>"))
-    f2.update_layout(**PLOT_LAYOUT, xaxis_title="Aridity index (PET/P)", yaxis_title="Recharge / rainfall",
+                              hovertemplate="<b>%{text}</b><br>P/PET %{x:.3f}<br>R/P %{y:.3f}<extra></extra>"))
+    f2.update_layout(**PLOT_LAYOUT, xaxis_title="Aridity index (P/PET, lower is drier)", yaxis_title="Recharge / rainfall",
                      yaxis_type="log", xaxis_type="log", height=420, title="Recharge ratio versus aridity")
+    f1_rng = cap_range(ok[ycol], axis_cap, True)
+    if f1_rng:
+        log_ticks(f1, "y", rng=f1_rng)
+    log_ticks(f2, "x", values=ok["Aridity"]); log_ticks(f2, "y", values=ok[ycol] / ok["Rain_mm_y"])
     st.plotly_chart(brand(f1), width="stretch")
     st.plotly_chart(brand(f2), width="stretch")
 
@@ -415,6 +453,8 @@ if run is not None:
                          title=f"{bid}: Cl_gw {r['Clgw_mg_L']:.1f} mg/L, P {r['Rain_mm_y']:.0f} mm/y, "
                                f"RC {r['RC']:.3f}, deposition {r['ClDep_mean_kg_ha_y']:.1f} kg/ha/y")
         fh.update_xaxes(type="log" if hist_log else "linear")
+        if hist_log:
+            log_ticks(fh, "x", values=edges)
         st.plotly_chart(brand(fh), width="stretch")
         trimmed = n_total - len(shown)
         st.caption(f"{n_total} realisations; {trimmed} above {upper:.3g} mm/y not shown. Mean {r['R_RC_mean_mm_y']:.3g} mm/y, "

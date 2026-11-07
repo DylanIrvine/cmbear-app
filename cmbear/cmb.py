@@ -200,7 +200,7 @@ COLUMN_NOTES = {
     "CV_used": "Coefficient of variation actually applied to Cl_gw",
     "Clgw_sd_source": "Where the SD came from: repeat samples (3 or more) or the blanket CV",
     "pixel_row/pixel_col": "Indices of the 0.05 degree grid cell the bore fell in",
-    "Rain_mm_y, PET_mm_y, Aridity, RC": "Climate and runoff coefficient at the pixel",
+    "Rain_mm_y, PET_mm_y, Aridity, RC": "Climate and runoff coefficient at the pixel; Aridity is P/PET (lower is drier)",
     "ClDep_*": "Chloride deposition statistics at the pixel (kg/ha/y)",
     "R_CMB_mean/5/95_mm_y": "Regular CMB recharge from mean/5th/95th percentile deposition (no runoff term)",
     "RP_CMB": "R_CMB_mean divided by rainfall",
