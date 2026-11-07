@@ -21,6 +21,8 @@ BADGE, FAVICON = LOGO_DIR / "cmbear_badge.png", LOGO_DIR / "favicon.png"
 
 st.set_page_config(page_title="CMBEAR online", page_icon=str(FAVICON) if FAVICON.exists() else ":droplet:")
 
+thisyear = current_year = str(datetime.now().year)
+
 # Default plot colours (users can override with their own hex codes under Plot colours).
 DEFAULT_COLOURS = {"primary": "#4a90c2", "secondary": "#e0812b", "reference": "#9a9a9a"}
 PLOT_LAYOUT = dict(font=dict(size=13), margin=dict(l=60, r=20, t=50, b=70))
@@ -117,7 +119,8 @@ st.markdown(
     "Note: CMBEAR online only works for Australian bores.\n\n"
     "Input: a CSV or Excel file with columns ID, Lat, Lon and Clgw (mg/L). Repeat samples under the same ID are "
     "averaged, and where there are three or more their standard deviation is used in place of the blanket CV.\n \n"
-    "Please cite the Lee et al. (2024) paper:\n\n"
+    "Please cite as:\n\n"
+    f"Irvine, D.J. ({thisyear}) CMBEAR online, https://cmbear-app.streamlit.app/ \n\n"
     "Lee, S., Irvine, D.J., Duvert, C., Rau, G.C., Cartwright, I. (2024). A high-resolution map of diffuse "
     "groundwater recharge rates for Australia. Hydrology and Earth System Sciences, 28, 1771-1790. "
     "https://doi.org/10.5194/hess-28-1771-2024\n\n"
@@ -140,7 +143,7 @@ with st.expander("**References**"):
         "Chloride deposition maps (original reference):\n\n"
         "Wilkins, A., Crosbie, R., Louth-Robins, T., Davies, P. Raiber, M., Dawes, W., Gao, L. (2022)"
         "Australian gridded chloride deposition-rate dataset. Data In Brief, 42, 108189."
-        "10.1016/j.dib.2022.108189/ \n\n"
+        "https://doi.org/10.1016/j.dib.2022.108189/ \n\n"
     )
 
 # --------------------------------------------------------------------------- #
