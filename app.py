@@ -173,6 +173,18 @@ with st.expander("**References**"):
         "https://doi.org/10.1016/j.dib.2022.108189/ \n\n"
     )
 
+with st.expander("**Privacy**"):
+    st.write(
+        "This app does not store, log or record who uses it, uploaded files, bore locations or results. "
+        "Your file is processed in memory for your session only and is discarded when you close or reload "
+        "the page. The only thing recorded is the total number of runs, a single number with no "
+        "information about the run attached.\n\n"
+        "The app is hosted on Streamlit Community Cloud (Snowflake), so your file passes through their "
+        "servers while it is processed, and their own infrastructure is covered by the Streamlit privacy "
+        "notice. To keep your data entirely on your own computer, run the app locally (see the README "
+        "on GitHub)."
+    )
+
 # --------------------------------------------------------------------------- #
 # 1. bore data
 # --------------------------------------------------------------------------- #
@@ -236,11 +248,18 @@ st.markdown("Not much to be said here. Click the button to run the analysis.")
 if bores is None:
     st.info("Upload a bore spreadsheet in section 1 to enable the run.")
 if st.button("Calculate recharge", type="primary", disabled=bores is None):
-    res, real = run_cmbear(bores, grids(), settings)
-    st.session_state["run"] = dict(res=res, real=real, settings=settings, msgs=msgs, file=upload.name)
-    new_total = run_counter.increment_runs()
-    if new_total is not None:
-        st.session_state["run_count"] = new_total
+    # Caught so that an unexpected failure is not written to the server log as a traceback,
+    # which could quote values from the user's file. Nothing about the input is logged.
+    try:
+        res, real = run_cmbear(bores, grids(), settings)
+    except Exception:  # noqa: BLE001
+        st.error("The calculation failed for this file. Please check the input values and settings, "
+                 "or contact the developer with a description of the problem (not the data).")
+    else:
+        st.session_state["run"] = dict(res=res, real=real, settings=settings, msgs=msgs, file=upload.name)
+        new_total = run_counter.increment_runs()
+        if new_total is not None:
+            st.session_state["run_count"] = new_total
 
 run = st.session_state.get("run")
 if run is not None:

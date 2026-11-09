@@ -100,6 +100,20 @@ The output records which rule applied to each bore (`Clgw_sd_source`).
 - Points exactly on a 0.05 degree cell boundary are assigned deterministically to the northern or
   western cell. The original's result on such points depended on accumulated floating point error.
 
+## Privacy
+
+The app does not store, log or record who uses it, uploaded files, bore locations or results. Uploads are
+read into memory for the user's session only and are never written to disk or shared between sessions.
+The optional run counter (`cmbear/run_counter.py`) sends a single increment command to Upstash Redis and
+carries no information about the user or the run. The bore map is drawn from the bundled grids, so no
+external map-tile service is contacted. Streamlit browser telemetry is disabled in `.streamlit/config.toml`
+(`browser.gatherUsageStats = false`); a hosting platform may override this. Calculation failures are caught
+so that tracebacks, which can quote input values, are not written to the server log.
+
+When deployed on Streamlit Community Cloud, uploaded files pass through Streamlit (Snowflake) servers while
+they are processed, and the platform's own logging is outside the app's control. Users who need their data
+to stay on their own machine should run the app locally (see Run locally).
+
 ## Deploying to Streamlit Community Cloud
 
 1. Push this repository to GitHub (public).

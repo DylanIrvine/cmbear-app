@@ -1,3 +1,7 @@
 [server]
 maxUploadSize = 50
 headless = true
+
+[browser]
+# Do not send Streamlit usage telemetry from viewers' browsers.
+gatherUsageStats = false
