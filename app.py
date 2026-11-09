@@ -182,7 +182,7 @@ with st.expander("**Privacy**"):
         "The app is hosted on Streamlit Community Cloud (Snowflake), so your file passes through their "
         "servers while it is processed, and their own infrastructure is covered by the Streamlit privacy "
         "notice. To keep your data entirely on your own computer, run the app locally (see the README "
-        "on GitHub)."
+        "on Source code is on [GitHub](https://github.com/DylanIrvine/cmbear-app)."
     )
 
 # --------------------------------------------------------------------------- #
@@ -490,14 +490,14 @@ For each bore the app locates the 0.05 degree grid cell containing it and extrac
 PET, aridity, the mean annual runoff coefficient (RC) and the chloride deposition statistics from the grids
 of Lee et al. (2024). Two recharge estimates follow.
 
-**Regular chloride mass balance** (Irvine and Cartwright, 2022):
+**Regular chloride mass balance** (Crosbine and Rachakonda,2021; Irvine and Cartwright, 2022):
 
 $R = \dfrac{100\,D}{Cl_{gw}}$
 
 with $D$ the mean chloride deposition (kg/ha/y), $Cl_{gw}$ groundwater chloride (mg/L) and $R$ in mm/y.
 The 5th and 95th percentile deposition grids give `R_CMB_5` and `R_CMB_95`.
 
-**Stochastic CMB with a runoff term** (CMBEAR2, Lee et al., 2024):
+**Stochastic CMB with a runoff term** (Crosbine and Rachakonda,2021; Lee et al., 2024):
 
 $R = \dfrac{100\,D\,(1 - \alpha\,RC)}{Cl_{gw}}$
 
@@ -508,7 +508,7 @@ percentiles and the mean of the realisations are reported (`R_RC_*`).
 **Random forest values** (`RF_*`) are read directly from the published national grids at the same pixel:
 recharge (R5, R50, R95, mm/y) and recharge divided by rainfall (RP5, RP50, RP95).
 
-**Differences from the original CMBEAR2_v1.0.py script**
+**Differences from the original CMBEAR2_v1.0.py script from Lee et al. (2024)**
 
 - Input is reduced to ID, Lat, Lon, Clgw. Repeat samples per ID are averaged; with three or more samples
   their standard deviation is used for the Cl_gw distribution.
