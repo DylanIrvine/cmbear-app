@@ -26,7 +26,9 @@ thisyear = current_year = str(datetime.now().year)
 
 # Default plot colours (users can override with their own hex codes under Plot colours).
 DEFAULT_COLOURS = {"primary": "#4a90c2", "secondary": "#e0812b", "reference": "#9a9a9a"}
-PLOT_LAYOUT = dict(font=dict(size=13), margin=dict(l=60, r=20, t=50, b=70))
+# White background on every plot, on screen and in downloads, whatever the app's light/dark theme.
+PLOT_LAYOUT = dict(template="plotly_white", paper_bgcolor="white", plot_bgcolor="white",
+                   font=dict(size=13, color="#222222"), margin=dict(l=60, r=20, t=50, b=70))
 DL_LAYOUT_W = 800   # pixel width figures are laid out at for downloads, before scaling to the chosen dpi
 ATTRIBUTION = "Produced using CMBEAR online - Dylan Irvine"
 # Colour-bar / axis titles for result columns and background grids on the bore map.
@@ -354,6 +356,7 @@ if run is not None:
         scale = dl_cm / 2.54 * dl_dpi / DL_LAYOUT_W
         cfg = dict(displaylogo=False, toImageButtonOptions=dict(
             format=dl_fmt.lower(), filename=name, width=DL_LAYOUT_W, height=h, scale=scale))
+        kw.setdefault("theme", None)   # Streamlit's theme would replace the white background in dark mode
         st.plotly_chart(brand(fig), width="stretch", config=cfg, **kw)
     label_font = dict(size=10)
 
@@ -407,7 +410,7 @@ if run is not None:
     if len(with_coords):
         show(bore_map(with_coords, grids(), cvar, MAP_LABELS[cvar], bgkey, logc, point_colour=C_CMB,
                       show_ids=show_ids, background_label=bg_label, shared_range=shared),
-             "cmbear_bore_map", theme=None)
+             "cmbear_bore_map")
         st.caption("Main panel: bores over the chosen grid (greys, darker is higher), each with its own colour bar in "
                    "discrete classes. Cells with no grid value are left white. "
                    + ("Bores and background share one colour range. " if shared else "")
@@ -433,7 +436,7 @@ if run is not None:
         hi = min(axis_cap, float(np.nanmax([d["RF_R95_mm_y"].max(), d["R_RC_95_mm_y"].max()])) * 1.2)
         fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="1:1",
                                  line=dict(color=C_LINE, width=1.5, dash="dash")))
-    fig.update_layout(**PLOT_LAYOUT, xaxis_title="Random forest median recharge (mm/y)\n (Lee et al. (2024)",
+    fig.update_layout(**PLOT_LAYOUT, xaxis_title="Random forest median recharge (mm/y), Lee et al. (2024)",
                       yaxis_title="Stochastic CMB median recharge (mm/y)", height=520,
                       legend=dict(orientation="h", y=1.08))
     both = d[["RF_R5_mm_y", "RF_R95_mm_y", "R_RC_5_mm_y", "R_RC_95_mm_y"]].to_numpy().ravel()
