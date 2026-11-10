@@ -11,6 +11,10 @@ GREYS = [[0, "#f7f7f7"], [1, "#8c8c8c"]]          # muted background ramp (land 
 DEFAULT_POINT = "#e0812b"                         # end colour of the single-hue ramp for the bore colour variable
 OCEAN = "#dfe9f3"
 INSET_LON, INSET_LAT = (112.0, 154.0), (-44.0, -10.0)   # Australia inset extent (degrees)
+MAP_NOMINAL_W = 640       # px; figure height is set so the main panel fills the full height at this width or wider
+MAP_MARGIN = dict(l=60, r=20, t=30, b=70)
+MAP_X_DOMAIN = 0.72       # fraction of the plot-area width given to the main panel
+MAP_ASPECT = (0.7, 1.5)   # allowed main-panel height/width (pixels); the short side is widened with grid
 INSET_REF_LAT = -27.0      # latitude at which the inset's aspect ratio and scale bar are true
 KM_PER_DEG_LAT = 111.32
 
@@ -113,6 +117,19 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
     y0, y1 = max(grids.yll, lat0 - pad_lat), min(grids.ytop, lat1 + pad_lat)
     x0, x1 = max(grids.xll, lon0 - pad_lon), min(grids.xright, lon1 + pad_lon)
 
+    # Keep the panel's shape within MAP_ASPECT by showing more grid along the short side, so the figure height
+    # (set from the aspect below) stays sensible and the inset/colour bars fit beside it.
+    sr = 1 / np.cos(np.deg2rad((y0 + y1) / 2))
+    asp = (y1 - y0) * sr / (x1 - x0)
+    if asp < MAP_ASPECT[0]:
+        need = MAP_ASPECT[0] * (x1 - x0) / sr
+        ym = 0.5 * (y0 + y1)
+        y0, y1 = max(grids.yll, ym - need / 2), min(grids.ytop, ym + need / 2)
+    elif asp > MAP_ASPECT[1]:
+        need = (y1 - y0) * sr / MAP_ASPECT[1]
+        xm = 0.5 * (x0 + x1)
+        x0, x1 = max(grids.xll, xm - need / 2), min(grids.xright, xm + need / 2)
+
     land = np.isfinite(grids["cld_mean"])
     bg_log = bool(background) and log_colour and (shared_range or background.startswith("rf_r"))
     bg = grids[background] if background else np.where(land, 1.0, np.nan)
@@ -151,8 +168,10 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
     # Colour bars sit under the inset, side by side (bores, then background), titles rotated alongside.
     frac = ((x1 - x0) * (y1 - y0)) / ((grids.xright - grids.xll) * (grids.ytop - grids.yll))
     show_inset = bool(frac < 0.5)
-    cb_len, cb_y = (0.50, 0.02) if show_inset else (0.92, 0.04)
-    cb_common = dict(len=cb_len, y=cb_y, yanchor="bottom", thickness=14, xanchor="left",
+    # Bottom of the colour bars level with the bottom of the main panel (y = 0 of the plot area);
+    # tops kept below the inset, whose bottom is never below 0.60 of the plot height.
+    cb_len = 0.52 if show_inset else 1.0
+    cb_common = dict(len=cb_len, y=0, yanchor="bottom", thickness=14, xanchor="left",
                      outlinecolor="#999999", outlinewidth=1, tickfont=dict(size=11, color="#222222"))
     has_bg_bar = bool(background)
 
@@ -161,14 +180,14 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
         z=crop, x=lons_c, y=lats_c, colorscale=b_scale if background else GREYS, zmin=b_lo, zmax=b_hi, hoverinfo="skip", zsmooth=False,
         showscale=has_bg_bar,
         colorbar=dict(title=dict(text=background_label or (background or ""), side="right",
-                                 font=dict(size=12, color="#222222")),
+                                 font=dict(size=11, color="#222222")),
                       x=0.885, **cb_common, **_edge_ticks(b_edges, bg_log)) if has_bg_bar else None))
     fig.add_trace(go.Scatter(
         x=ok["Lon"], y=ok["Lat"], mode="markers+text" if show_ids else "markers", name="Bores",
         text=ok["ID"].astype(str), textposition="top right", textfont=dict(size=10, color="#222222"),
         marker=dict(color=cvals, colorscale=p_scale, cmin=p_lo, cmax=p_hi, size=9,
                     line=dict(width=1, color="#333333"),
-                    colorbar=dict(title=dict(text=colour_label, side="right", font=dict(size=12, color="#222222")),
+                    colorbar=dict(title=dict(text=colour_label, side="right", font=dict(size=11, color="#222222")),
                                   x=0.765, **cb_common, **_edge_ticks(p_edges, log_colour))),
         customdata=np.stack([ok["ID"], vals, ok["status"]], axis=1),
         hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]:.3g}<br>lat %{y:.4f}, lon %{x:.4f}"
@@ -190,17 +209,24 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
         _scale_bar(fig, length_km=1000, n_seg=4)
 
     mid_lat = np.deg2rad((y0 + y1) / 2)
+    # Height that makes the main panel exactly fill the plot-area height at MAP_NOMINAL_W. At that width or
+    # wider (the app's centred layout, and downloads at 800 px) plotly shrinks the panel sideways instead, so
+    # its top meets the inset top and its bottom meets the colour-bar bottoms. Narrower screens shrink it
+    # vertically and the alignment loosens.
+    panel_w = MAP_X_DOMAIN * (MAP_NOMINAL_W - MAP_MARGIN["l"] - MAP_MARGIN["r"])
+    panel_h = panel_w * (y1 - y0) / np.cos(mid_lat) / (x1 - x0)
+    fig_h = int(np.floor(panel_h)) + MAP_MARGIN["t"] + MAP_MARGIN["b"]
     fig.update_layout(
-        template="simple_white", height=620, margin=dict(l=60, r=20, t=40, b=70),
+        template="simple_white", height=fig_h, margin=MAP_MARGIN,
         paper_bgcolor="white", plot_bgcolor="white", showlegend=False,
         font=dict(color="#222222"),
-        xaxis=dict(title="Longitude", range=[x0, x1], constrain="domain", domain=[0, 0.72]),
-        yaxis=dict(title="Latitude", range=[y0, y1], constrain="domain", scaleanchor="x",
+        xaxis=dict(title="Longitude", range=[x0, x1], constrain="domain", domain=[0, MAP_X_DOMAIN]),
+        yaxis=dict(title="Latitude", range=[y0, y1], domain=[0, 1], constrain="domain", scaleanchor="x",
                    scaleratio=1 / np.cos(mid_lat)),
         xaxis2=dict(domain=[0.76, 0.99], anchor="y2", range=list(INSET_LON), constrain="domain", showticklabels=False, ticks="",
                     showgrid=False, zeroline=False, showline=True, linecolor="#999999", mirror=True,
                     visible=show_inset),
-        yaxis2=dict(domain=[0.60, 0.98], anchor="x2", range=list(INSET_LAT), constrain="domain", constraintoward="top",
+        yaxis2=dict(domain=[0.60, 1.0], anchor="x2", range=list(INSET_LAT), constrain="domain", constraintoward="top",
                     showticklabels=False, ticks="",
                     showgrid=False, zeroline=False, showline=True, linecolor="#999999", mirror=True,
                     scaleanchor="x2", scaleratio=1 / np.cos(np.deg2rad(INSET_REF_LAT)), visible=show_inset),
