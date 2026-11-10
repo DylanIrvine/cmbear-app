@@ -152,7 +152,8 @@ st.markdown(
     "forest recharge model of Lee et al. (2024).\n\n"
     
     "Input: a CSV or Excel file with columns ID, Lat, Lon and Clgw (mg/L). Repeat samples under the same ID are "
-    "averaged, and where there are three or more their standard deviation is used in place of the blanket CV.\n \n"
+    "averaged, and where there are three or more their standard deviation is used in place of the blanket "
+    "coefficient of variation (CV = standard deviation / mean). \n \n"
     
     "Please cite as:\n\n"
     f"Irvine, D.J. ({thisyear}) CMBEAR online, https://cmbear-app.streamlit.app/ \n\n"
@@ -636,5 +637,5 @@ with st.expander("Output columns"):
 with st.expander("Warnings"):
     st.markdown("CMBEAR was named after the mighty Australian predator, the Drop Bear.\n\n"
                 "Remember, that unlike most Australians, drop bears don't like Vegemite. "
-                "To stay afe from drop bears, dab a little Vegemite behind each ear."
+                "To stay safe from drop bears, dab a little Vegemite behind each ear."
                 )
