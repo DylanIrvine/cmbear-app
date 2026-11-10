@@ -15,7 +15,7 @@ from cmbear import CMBSettings, load_grids, parse_input, run_cmbear
 from cmbear import run_counter
 from cmbear.cmb import COLUMN_NOTES
 from cmbear.inputs import read_table
-from cmbear.plotting import bore_map
+from cmbear.plotting import BERGHUIJS_ALPHA, BERGHUIJS_BETA, berghuijs_curve, bore_map, fit_berghuijs
 
 LOGO_DIR = Path(__file__).resolve().parent / "logo"
 BADGE, FAVICON = LOGO_DIR / "cmbear_badge.png", LOGO_DIR / "favicon.png"
@@ -28,6 +28,17 @@ thisyear = current_year = str(datetime.now().year)
 DEFAULT_COLOURS = {"primary": "#4a90c2", "secondary": "#e0812b", "reference": "#9a9a9a"}
 PLOT_LAYOUT = dict(font=dict(size=13), margin=dict(l=60, r=20, t=50, b=70))
 ATTRIBUTION = "Produced using CMBEAR online - Dylan Irvine"
+# Colour-bar / axis titles for result columns and background grids on the bore map.
+MAP_LABELS = {
+    "R_RC_50_mm_y": "Stochastic CMB recharge, median (mm/y)",
+    "R_CMB_mean_mm_y": "Regular CMB recharge, mean (mm/y)",
+    "RF_R50_mm_y": "Random forest recharge, median (mm/y)",
+    "RP_RC_50": "Recharge/rainfall, stochastic CMB median (-)",
+    "Clgw_mg_L": "Groundwater chloride (mg/L)",
+    "Rain_mm_y": "Rainfall (mm/y)",
+    "fill_radius_climate_km": "Climate gap-fill radius (km)",
+}
+RECHARGE_COLS = {"R_RC_50_mm_y", "R_CMB_mean_mm_y", "RF_R50_mm_y"}
 FILL_LABELS = {"Mean of neighbouring cells": "neighbours", "Assume RC value, leave climate blank": "assume_rc",
                "Leave blank": "none"}
 
@@ -364,17 +375,22 @@ if run is not None:
 
     st.subheader("Bore map")
     m1, m2, m3 = st.columns([2, 2, 1], vertical_alignment="bottom")
-    cvar = m1.selectbox("Colour bores by", ["R_RC_50_mm_y", "R_CMB_mean_mm_y", "RF_R50_mm_y", "RP_RC_50",
-                                             "Clgw_mg_L", "Rain_mm_y", "fill_radius_climate_km"])
-    bgopt = m2.selectbox("Background", ["Random forest R50", "Rainfall", "Land only"])
+    cvar = m1.selectbox("Colour bores by", list(MAP_LABELS), format_func=MAP_LABELS.get)
+    bgopt = m2.selectbox("Background", ["Random forest recharge, median", "Rainfall", "Land only"])
     logc = m3.checkbox("Log colour", value=cvar not in ("fill_radius_climate_km", "Rain_mm_y"))
-    bgkey = {"Random forest R50": "rf_r50", "Rainfall": "rain", "Land only": None}[bgopt]
+    bgkey = {"Random forest recharge, median": "rf_r50", "Rainfall": "rain", "Land only": None}[bgopt]
+    bg_label = {"rf_r50": "Random forest recharge, median (mm/y)", "rain": "Rainfall (mm/y)", None: None}[bgkey]
+    # One colour range for bores and background when they are the same quantity, so shades can be compared.
+    shared = (bgkey == "rf_r50" and cvar in RECHARGE_COLS) or (bgkey == "rain" and cvar == "Rain_mm_y")
     with_coords = res[np.isfinite(res["Lat"]) & np.isfinite(res["Lon"])]
     if len(with_coords):
-        st.plotly_chart(brand(bore_map(with_coords, grids(), cvar, cvar, bgkey, logc, point_colour=C_CMB, show_ids=show_ids)),
-                        width="stretch")
-        st.caption("Main panel: bores over the chosen grid (greys, darker is higher). Inset: Australia with the "
-                   "main panel's extent outlined. Bores without a result are still plotted; hover for status.")
+        st.plotly_chart(brand(bore_map(with_coords, grids(), cvar, MAP_LABELS[cvar], bgkey, logc, point_colour=C_CMB,
+                                       show_ids=show_ids, background_label=bg_label, shared_range=shared)),
+                        width="stretch", theme=None)
+        st.caption("Main panel: bores over the chosen grid (greys, darker is higher), each with its own colour bar. "
+                   + ("Bores and background share one colour range. " if shared else "")
+                   + "Inset: Australia with the main panel's extent outlined. Bores without a result are still "
+                     "plotted; hover for status.")
 
     st.subheader("Stochastic CMB versus random forest recharge")
     logax = st.checkbox("Log axes", value=True, key="log1")
@@ -419,18 +435,80 @@ if run is not None:
     f1.update_layout(**PLOT_LAYOUT, xaxis_title="Mean annual rainfall (mm/y)", yaxis_title="Recharge (mm/y)",
                      yaxis_type="log", height=420, title="Recharge versus rainfall",
                      yaxis_range=cap_range(ok[ycol], axis_cap, True))
-    f2 = go.Figure(go.Scatter(x=ok["Aridity"], y=ok[ycol] / ok["Rain_mm_y"], mode=label_mode, name=which,
-                              marker=marker(C_CMB), text=ok["ID"].astype(str), textposition="top right",
-                              textfont=label_font,
-                              hovertemplate="<b>%{text}</b><br>P/PET %{x:.3f}<br>R/P %{y:.3f}<extra></extra>"))
-    f2.update_layout(**PLOT_LAYOUT, xaxis_title="Aridity index (P/PET, lower is drier)", yaxis_title="Recharge / rainfall",
-                     yaxis_type="log", xaxis_type="log", height=420, title="Recharge ratio versus aridity")
     f1_rng = cap_range(ok[ycol], axis_cap, True)
     if f1_rng:
         log_ticks(f1, "y", rng=f1_rng)
-    log_ticks(f2, "x", values=ok["Aridity"]); log_ticks(f2, "y", values=ok[ycol] / ok["Rain_mm_y"])
     st.plotly_chart(brand(f1), width="stretch")
+
+    # Recharge fraction against aridity, laid out as Berghuijs et al. (2024) Fig. 1a
+    st.subheader("Recharge fraction versus aridity")
+    a1, a2, a3 = st.columns([1, 1, 2], vertical_alignment="bottom")
+    rp_log = a1.checkbox("Log y", value=False, key="rp_log")
+    show_global = a2.checkbox("Global curve", value=True, key="rp_global",
+                              help=f"Berghuijs et al. (2022) global fit, alpha = {BERGHUIJS_ALPHA}, "
+                                   f"beta = {BERGHUIJS_BETA}.")
+    fit_all = a3.checkbox("Include aridity < 1 in the fit", value=False, key="rp_fitall",
+                          help="Berghuijs et al. fit only sites where PET exceeds rainfall (aridity >= 1).")
+    phi = (ok["PET_mm_y"] / ok["Rain_mm_y"]).to_numpy(float)
+    rp = (ok[ycol] / ok["Rain_mm_y"]).to_numpy(float)
+    good = np.isfinite(phi) & np.isfinite(rp) & (phi > 0) & (rp > 0)
+    dry = good & (phi >= 1)
+    wet = good & (phi < 1)
+    f2 = go.Figure()
+    for sel, name, colour in ((dry, "Aridity ≥ 1", C_CMB), (wet, "Aridity < 1", C_LINE)):
+        if sel.any():
+            f2.add_trace(go.Scatter(
+                x=phi[sel], y=rp[sel], mode=label_mode, name=name, marker=marker(colour),
+                text=ok["ID"].astype(str).to_numpy()[sel], textposition="top right", textfont=label_font,
+                hovertemplate="<b>%{text}</b><br>PET/P %{x:.2f}<br>R/P %{y:.3f}<extra></extra>"))
+    fsel = good if fit_all else dry
+    fit = fit_berghuijs(phi[fsel], rp[fsel])
+    x_lo = max(0.05, float(np.nanmin(phi[good])) * 0.9) if good.any() else 0.7
+    x_hi = float(np.nanmax(phi[good])) * 1.1 if good.any() else 10
+    x_lo, x_hi = min(x_lo, 0.7), max(x_hi, 10)
+    xc_start = x_lo if fit_all else 1.0
+    xc = np.logspace(np.log10(xc_start), np.log10(x_hi), 200)
+    if fit:
+        # Solid over the aridity range of the fitted bores, dashed where it is extrapolated.
+        p_lo, p_hi = float(np.nanmin(phi[fsel])), float(np.nanmax(phi[fsel]))
+        xin = np.logspace(np.log10(p_lo), np.log10(p_hi), 100)
+        f2.add_trace(go.Scatter(x=xc, y=berghuijs_curve(xc, fit["alpha"], fit["beta"]), mode="lines",
+                                name="Fit, extrapolated", line=dict(color=C_RF, width=1.2, dash="dash"),
+                                hoverinfo="skip"))
+        f2.add_trace(go.Scatter(x=xin, y=berghuijs_curve(xin, fit["alpha"], fit["beta"]), mode="lines",
+                                name=f"Fit: α = {fit['alpha']:.3f}, β = {fit['beta']:.2f} (n = {fit['n']})",
+                                line=dict(color=C_RF, width=3)))
+    if show_global:
+        f2.add_trace(go.Scatter(x=xc, y=berghuijs_curve(xc, BERGHUIJS_ALPHA, BERGHUIJS_BETA), mode="lines",
+                                name="Berghuijs et al. (2022) global fit", line=dict(color=C_LINE, width=1.5, dash="dot")))
+    f2.add_vline(x=1, line=dict(color="#555555", width=1.2, dash="dash"))
+    f2.add_annotation(x=0, xref="x", xshift=6, y=1, yref="paper", yanchor="top", xanchor="left", showarrow=False,
+                      text="E<sub>p</sub>/P = 1", font=dict(size=11, color="#555555"))
+    if not rp_log:
+        f2.add_hline(y=1, line=dict(color="#555555", width=1, dash="dash"))
+    f2.update_layout(**PLOT_LAYOUT, height=520, xaxis_title="Climatic aridity, PET/P",
+                     yaxis_title=f"Recharge fraction, R/P ({which.split(' (')[0]})",
+                     legend=dict(orientation="h", y=1.14, x=0))
+    f2.update_xaxes(type="log", range=[np.log10(x_lo), np.log10(x_hi)])
+    log_ticks(f2, "x", rng=[np.log10(x_lo), np.log10(x_hi)])
+    if rp_log:
+        f2.update_yaxes(type="log")
+        log_ticks(f2, "y", values=rp[good])
+    else:
+        ymax = float(np.nanmax(rp[good])) if good.any() else 1
+        f2.update_yaxes(range=[0, min(max(1.1, ymax * 1.05), 2.0)])
     st.plotly_chart(brand(f2), width="stretch")
+    if fit:
+        msg = (f"Fitted to individual bores ({fit['n']}, {'all aridity' if fit_all else 'PET/P ≥ 1'}) by least absolute "
+               f"residuals in R/P, as in Berghuijs et al. (2022): R/P = alpha / (1 + ln(1 + (PET/P)^beta)). "
+               f"Mean absolute error {fit['mae']:.3f}; R2 {fit['r2']:.2f}. ")
+        span = np.log10(np.nanmax(phi[dry]) / np.nanmin(phi[dry])) if dry.sum() > 1 else 0
+        if fit["at_bound"] or span < 0.3:
+            msg += ("The aridity range of these bores is narrow, so alpha and beta are poorly constrained "
+                    "individually; treat the curve as a local description only (dashed where extrapolated). ")
+        st.caption(msg)
+    else:
+        st.caption("Fewer than 5 bores with PET/P >= 1 and a positive recharge estimate, so no curve was fitted.")
 
     st.subheader("Recharge distribution for one bore")
     if real is None:
