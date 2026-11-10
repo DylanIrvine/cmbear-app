@@ -27,6 +27,7 @@ thisyear = current_year = str(datetime.now().year)
 # Default plot colours (users can override with their own hex codes under Plot colours).
 DEFAULT_COLOURS = {"primary": "#4a90c2", "secondary": "#e0812b", "reference": "#9a9a9a"}
 PLOT_LAYOUT = dict(font=dict(size=13), margin=dict(l=60, r=20, t=50, b=70))
+DL_LAYOUT_W = 800   # pixel width figures are laid out at for downloads, before scaling to the chosen dpi
 ATTRIBUTION = "Produced using CMBEAR online - Dylan Irvine"
 # Colour-bar / axis titles for result columns and background grids on the bore map.
 MAP_LABELS = {
@@ -333,7 +334,27 @@ if run is not None:
         show_ids = st.checkbox("Label markers with bore IDs", value=False,
                                help="Adds the ID beside each marker on the map and scatter plots. Best for small "
                                     "numbers of bores; labels can overlap when many are plotted.")
+        st.markdown("**Figure downloads** (camera icon at the top right of each plot)")
+        dl1, dl2, dl3 = st.columns(3)
+        dl_fmt = dl1.selectbox("Format", ["PNG", "SVG"], key="dl_fmt",
+                               help="SVG is vector, so it is sharp at any size and dpi does not apply.")
+        dl_cm = dl2.number_input("Print width (cm)", 5.0, 40.0, 16.0, 0.5, key="dl_cm",
+                                 help="Width the figure will be printed at. With dpi this sets the pixel size "
+                                      "of PNG downloads.")
+        dl_dpi = dl3.number_input("Resolution (dpi)", 72, 1200, 400, 50, key="dl_dpi")
     label_mode = "markers+text" if show_ids else "markers"
+
+    def show(fig, name, **kw):
+        """Draw a figure; its download button saves at the chosen print width and dpi.
+
+        The figure is laid out at DL_LAYOUT_W pixels wide for export (fonts keep their on-screen proportion)
+        and scaled up, so a 16 cm figure at 400 dpi is about 2520 pixels wide.
+        """
+        h = int(fig.layout.height or 500)
+        scale = dl_cm / 2.54 * dl_dpi / DL_LAYOUT_W
+        cfg = dict(displaylogo=False, toImageButtonOptions=dict(
+            format=dl_fmt.lower(), filename=name, width=DL_LAYOUT_W, height=h, scale=scale))
+        st.plotly_chart(brand(fig), width="stretch", config=cfg, **kw)
     label_font = dict(size=10)
 
     st.subheader("Recharge by bore")
@@ -367,7 +388,7 @@ if run is not None:
     fb.update_yaxes(type="log" if bar_log else "linear", range=bar_rng)
     if bar_log and bar_rng:
         log_ticks(fb, "y", rng=bar_rng)
-    st.plotly_chart(brand(fb), width="stretch")
+    show(fb, "cmbear_recharge_by_bore")
     st.caption("Bars: median (stochastic CMB, random forest) or mean (regular CMB). Whiskers: 5th to 95th percentile. "
                "Whiskers that would cross zero on a log axis are truncated by the axis.")
     if len(bd) > 80:
@@ -384,10 +405,11 @@ if run is not None:
     shared = (bgkey == "rf_r50" and cvar in RECHARGE_COLS) or (bgkey == "rain" and cvar == "Rain_mm_y")
     with_coords = res[np.isfinite(res["Lat"]) & np.isfinite(res["Lon"])]
     if len(with_coords):
-        st.plotly_chart(brand(bore_map(with_coords, grids(), cvar, MAP_LABELS[cvar], bgkey, logc, point_colour=C_CMB,
-                                       show_ids=show_ids, background_label=bg_label, shared_range=shared)),
-                        width="stretch", theme=None)
-        st.caption("Main panel: bores over the chosen grid (greys, darker is higher), each with its own colour bar. "
+        show(bore_map(with_coords, grids(), cvar, MAP_LABELS[cvar], bgkey, logc, point_colour=C_CMB,
+                      show_ids=show_ids, background_label=bg_label, shared_range=shared),
+             "cmbear_bore_map", theme=None)
+        st.caption("Main panel: bores over the chosen grid (greys, darker is higher), each with its own colour bar in "
+                   "discrete classes. Cells with no grid value are left white. "
                    + ("Bores and background share one colour range. " if shared else "")
                    + "Inset: Australia with the main panel's extent outlined. Bores without a result are still "
                      "plotted; hover for status.")
@@ -420,7 +442,7 @@ if run is not None:
     fig.update_yaxes(type="log" if logax else "linear", range=rng)
     if logax and rng:
         log_ticks(fig, "x", rng=rng); log_ticks(fig, "y", rng=rng)
-    st.plotly_chart(brand(fig), width="stretch")
+    show(fig, "cmbear_cmb_vs_rf")
     st.caption("Vertical bars: 5th to 95th percentile of the CMB realisations at the bore. Horizontal bars: "
                "5th to 95th percentile random forest grids at the same pixel. The RF model was trained on CMB "
                "estimates of this kind, so agreement is expected on average but not bore by bore.")
@@ -438,7 +460,7 @@ if run is not None:
     f1_rng = cap_range(ok[ycol], axis_cap, True)
     if f1_rng:
         log_ticks(f1, "y", rng=f1_rng)
-    st.plotly_chart(brand(f1), width="stretch")
+    show(f1, "cmbear_recharge_vs_rainfall")
 
     # Recharge fraction against aridity, laid out as Berghuijs et al. (2024) Fig. 1a
     st.subheader("Recharge fraction versus aridity")
@@ -497,7 +519,7 @@ if run is not None:
     else:
         ymax = float(np.nanmax(rp[good])) if good.any() else 1
         f2.update_yaxes(range=[0, min(max(1.1, ymax * 1.05), 2.0)])
-    st.plotly_chart(brand(f2), width="stretch")
+    show(f2, "cmbear_recharge_fraction_vs_aridity")
     if fit:
         msg = (f"Fitted to individual bores ({fit['n']}, {'all aridity' if fit_all else 'PET/P ≥ 1'}) by least absolute "
                f"residuals in R/P, as in Berghuijs et al. (2022): R/P = alpha / (1 + ln(1 + (PET/P)^beta)). "
@@ -552,7 +574,7 @@ if run is not None:
         fh.update_xaxes(type="log" if hist_log else "linear")
         if hist_log:
             log_ticks(fh, "x", values=edges)
-        st.plotly_chart(brand(fh), width="stretch")
+        show(fh, f"cmbear_distribution_{re.sub(r'[^A-Za-z0-9_-]+', '_', str(bid))}")
         trimmed = n_total - len(shown)
         st.caption(f"{n_total} realisations; {trimmed} above {upper:.3g} mm/y not shown. Mean {r['R_RC_mean_mm_y']:.3g} mm/y, "
                    f"median {r['R_RC_50_mm_y']:.3g} mm/y. The gap between them reflects the right tail that comes from "

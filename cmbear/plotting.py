@@ -17,19 +17,56 @@ def _downsample(arr: np.ndarray, max_n: int):
     return arr[::f, ::f], f
 
 
-def _colour_ticks(lo: float, hi: float, log: bool):
-    """Tick values/labels for a colour bar spanning [lo, hi] (log10 units when log)."""
-    if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
-        return {}
-    if not log:
-        return {}
-    k0, k1 = int(np.floor(lo)), int(np.ceil(hi))
-    mults = (1,) if hi - lo > 2.5 else (1, 2, 5)
-    vals = [np.log10(m * 10.0 ** k) for k in range(k0, k1 + 1) for m in mults]
-    vals = [v for v in vals if lo - 1e-9 <= v <= hi + 1e-9]
-    if len(vals) < 2:
-        return {}
-    return dict(tickvals=vals, ticktext=[f"{round(10 ** v, 6):g}" for v in vals])
+def _hex_ramp(c0: str, c1: str, n: int) -> list[str]:
+    """n colours evenly spaced in RGB between hex colours c0 and c1."""
+    a = np.array([int(c0[i:i + 2], 16) for i in (1, 3, 5)], float)
+    b = np.array([int(c1[i:i + 2], 16) for i in (1, 3, 5)], float)
+    t = np.linspace(0, 1, n) if n > 1 else np.array([1.0])
+    return ["#%02x%02x%02x" % tuple(np.round(a + (b - a) * x).astype(int)) for x in t]
+
+
+def _class_edges(lo: float, hi: float, log: bool) -> np.ndarray:
+    """Class boundaries at round values covering [lo, hi] (log10 units when log), about 4 to 10 classes.
+
+    Log: 1-2-5 per decade for spans up to ~3 decades, 1-3 up to ~6, otherwise decades.
+    Linear: a step of 1, 2, 2.5 or 5 x 10^k giving roughly 7 classes.
+    """
+    if not (np.isfinite(lo) and np.isfinite(hi)):
+        return np.array([0.0, 1.0])
+    if hi <= lo:
+        hi = lo + (0.1 if log else max(abs(lo) * 0.1, 1e-6))
+    if log:
+        span = hi - lo
+        mults = (1, 2, 5) if span <= 3.2 else (1, 3) if span <= 6 else (1,)
+        k0, k1 = int(np.floor(lo)) - 1, int(np.ceil(hi)) + 1
+        cand = np.array(sorted(np.log10(m * 10.0 ** k) for k in range(k0, k1 + 1) for m in mults))
+        i0 = int(np.searchsorted(cand, lo + 1e-9, side="right")) - 1
+        i1 = int(np.searchsorted(cand, hi - 1e-9, side="left"))
+        return cand[max(i0, 0):i1 + 1]
+    raw = (hi - lo) / 7
+    mag = 10 ** np.floor(np.log10(raw))
+    step = mag * min((m for m in (1, 2, 2.5, 5, 10) if m * mag >= raw))
+    e0, e1 = np.floor(lo / step + 1e-9) * step, np.ceil(hi / step - 1e-9) * step
+    return np.arange(e0, e1 + step / 2, step)
+
+
+def _discrete(edges: np.ndarray, c0: str, c1: str):
+    """Stepped plotly colourscale for the classes between edges (uneven widths allowed), and its colour range."""
+    zmin, zmax = float(edges[0]), float(edges[-1])
+    n = len(edges) - 1
+    cols = _hex_ramp(c0, c1, n)
+    pos = (edges - zmin) / (zmax - zmin)
+    scale = []
+    for i, c in enumerate(cols):
+        scale += [[float(pos[i]), c], [float(pos[i + 1]), c]]
+    return scale, zmin, zmax
+
+
+def _edge_ticks(edges: np.ndarray, log: bool) -> dict:
+    """Label every class boundary (thinned to every other one if there are many)."""
+    e = edges if len(edges) <= 11 else edges[::2]
+    text = [f"{round(10 ** v, 6):g}" if log else f"{round(v, 6):g}" for v in e]
+    return dict(tickvals=[float(v) for v in e], ticktext=text, ticks="outside")
 
 
 def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label: str,
@@ -66,6 +103,10 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
     crop, f = _downsample(bg[r0:r1, c0:c1], 400)
     lats_c = grids.ytop - (np.arange(r0, r1, f) + 0.5) * grids.res
     lons_c = grids.xll + (np.arange(c0, c1, f) + 0.5) * grids.res
+    # Clip the axes to the outer cell edges of the grid actually drawn, so no empty margin shows
+    half = 0.5 * f * grids.res
+    x0, x1 = float(lons_c[0] - half), float(lons_c[-1] + half)
+    y0, y1 = float(lats_c[-1] - half), float(lats_c[0] + half)
 
     vals = ok[colour_var].to_numpy(float)
     cvals = np.log10(np.where(vals > 0, vals, np.nan)) if log_colour else vals
@@ -78,10 +119,11 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
         lo, hi = min(p_lo, b_lo), max(p_hi, b_hi)
         p_lo = b_lo = lo
         p_hi = b_hi = hi
-    if p_hi <= p_lo:
-        p_hi = p_lo + 1e-6
-    if b_hi <= b_lo:
-        b_hi = b_lo + 1e-6
+    # Discrete classes with round boundaries; shared ranges get identical boundaries.
+    p_edges = _class_edges(p_lo, p_hi, log_colour)
+    b_edges = p_edges if (background and shared_range) else _class_edges(b_lo, b_hi, bg_log)
+    p_scale, p_lo, p_hi = _discrete(p_edges, "#fbf3ea", point_colour)
+    b_scale, b_lo, b_hi = _discrete(b_edges, GREYS[0][1], GREYS[1][1])
 
     # Colour bars sit under the inset, side by side (bores, then background), titles rotated alongside.
     frac = ((x1 - x0) * (y1 - y0)) / ((grids.xright - grids.xll) * (grids.ytop - grids.yll))
@@ -93,18 +135,18 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
 
     fig = go.Figure()
     fig.add_trace(go.Heatmap(
-        z=crop, x=lons_c, y=lats_c, colorscale=GREYS, zmin=b_lo, zmax=b_hi, hoverinfo="skip", zsmooth=False,
+        z=crop, x=lons_c, y=lats_c, colorscale=b_scale if background else GREYS, zmin=b_lo, zmax=b_hi, hoverinfo="skip", zsmooth=False,
         showscale=has_bg_bar,
         colorbar=dict(title=dict(text=background_label or (background or ""), side="right",
                                  font=dict(size=12, color="#222222")),
-                      x=0.885, **cb_common, **_colour_ticks(b_lo, b_hi, bg_log)) if has_bg_bar else None))
+                      x=0.885, **cb_common, **_edge_ticks(b_edges, bg_log)) if has_bg_bar else None))
     fig.add_trace(go.Scatter(
         x=ok["Lon"], y=ok["Lat"], mode="markers+text" if show_ids else "markers", name="Bores",
         text=ok["ID"].astype(str), textposition="top right", textfont=dict(size=10, color="#222222"),
-        marker=dict(color=cvals, colorscale=[[0, "#fbf3ea"], [1, point_colour]], cmin=p_lo, cmax=p_hi, size=9,
+        marker=dict(color=cvals, colorscale=p_scale, cmin=p_lo, cmax=p_hi, size=9,
                     line=dict(width=1, color="#333333"),
                     colorbar=dict(title=dict(text=colour_label, side="right", font=dict(size=12, color="#222222")),
-                                  x=0.765, **cb_common, **_colour_ticks(p_lo, p_hi, log_colour))),
+                                  x=0.765, **cb_common, **_edge_ticks(p_edges, log_colour))),
         customdata=np.stack([ok["ID"], vals, ok["status"]], axis=1),
         hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]:.3g}<br>lat %{y:.4f}, lon %{x:.4f}"
                       "<br>%{customdata[2]}<extra></extra>"))
@@ -114,6 +156,9 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
     lats_s = grids.ytop - (np.arange(0, grids.nrows, fs) + 0.5) * grids.res
     lons_s = grids.xll + (np.arange(0, grids.ncols, fs) + 0.5) * grids.res
     if show_inset:
+        # Ocean fill for the inset only (the main panel stays white, as no-data cells there are not always sea)
+        fig.add_shape(type="rect", xref="x2 domain", yref="y2 domain", x0=0, x1=1, y0=0, y1=1,
+                      fillcolor=OCEAN, opacity=1, line=dict(width=0), layer="below")
         fig.add_trace(go.Heatmap(z=small, x=lons_s, y=lats_s, colorscale=[[0, OCEAN], [1, "#bdbdbd"]],
                                  showscale=False, hoverinfo="skip", xaxis="x2", yaxis="y2"))
         fig.add_trace(go.Scatter(x=[x0, x1, x1, x0, x0], y=[y0, y0, y1, y1, y0], mode="lines",
@@ -123,10 +168,11 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
     mid_lat = np.deg2rad((y0 + y1) / 2)
     fig.update_layout(
         template="simple_white", height=620, margin=dict(l=60, r=20, t=40, b=70),
-        paper_bgcolor="white", plot_bgcolor=OCEAN, showlegend=False,
+        paper_bgcolor="white", plot_bgcolor="white", showlegend=False,
         font=dict(color="#222222"),
         xaxis=dict(title="Longitude", range=[x0, x1], constrain="domain", domain=[0, 0.72]),
-        yaxis=dict(title="Latitude", range=[y0, y1], scaleanchor="x", scaleratio=1 / np.cos(mid_lat)),
+        yaxis=dict(title="Latitude", range=[y0, y1], constrain="domain", scaleanchor="x",
+                   scaleratio=1 / np.cos(mid_lat)),
         xaxis2=dict(domain=[0.76, 0.99], anchor="y2", range=[grids.xll, grids.xright], showticklabels=False,
                     showgrid=False, zeroline=False, showline=True, linecolor="#999999", mirror=True,
                     visible=show_inset),
