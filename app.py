@@ -414,7 +414,7 @@ if run is not None:
         st.caption("Main panel: bores over the chosen grid (greys, darker is higher), each with its own colour bar in "
                    "discrete classes. Cells with no grid value are left white. "
                    + ("Bores and background share one colour range. " if shared else "")
-                   + "Inset: Australia with the main panel's extent outlined. Bores without a result are still "
+                   + "Inset: Australia with the main panel's extent outlined; scale bar true at 27°S. Bores without a result are still "
                      "plotted; hover for status.")
 
     st.subheader("Stochastic CMB versus random forest recharge")

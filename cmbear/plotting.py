@@ -10,6 +10,9 @@ from .grids import GridStack
 GREYS = [[0, "#f7f7f7"], [1, "#8c8c8c"]]          # muted background ramp (land data)
 DEFAULT_POINT = "#e0812b"                         # end colour of the single-hue ramp for the bore colour variable
 OCEAN = "#dfe9f3"
+INSET_LON, INSET_LAT = (112.0, 154.0), (-44.0, -10.0)   # Australia inset extent (degrees)
+INSET_REF_LAT = -27.0      # latitude at which the inset's aspect ratio and scale bar are true
+KM_PER_DEG_LAT = 111.32
 
 
 def _downsample(arr: np.ndarray, max_n: int):
@@ -67,6 +70,26 @@ def _edge_ticks(edges: np.ndarray, log: bool) -> dict:
     e = edges if len(edges) <= 11 else edges[::2]
     text = [f"{round(10 ** v, 6):g}" if log else f"{round(v, 6):g}" for v in e]
     return dict(tickvals=[float(v) for v in e], ticktext=text, ticks="outside")
+
+
+def _scale_bar(fig: go.Figure, length_km: float = 1000, n_seg: int = 4, x_start: float = 113.5,
+               y_base: float = -42.6, bar_h: float = 0.75):
+    """Alternating black/white scale bar in the lower left of the Australia inset (axes x2/y2).
+
+    Lengths are converted to degrees of longitude at INSET_REF_LAT, where the inset's aspect ratio is true;
+    on a lat/lon plot the scale is exact only at that latitude.
+    """
+    deg_per_km = 1 / (KM_PER_DEG_LAT * np.cos(np.deg2rad(INSET_REF_LAT)))
+    seg = length_km / n_seg * deg_per_km
+    for i in range(n_seg):
+        fig.add_shape(type="rect", xref="x2", yref="y2", x0=x_start + i * seg, x1=x_start + (i + 1) * seg,
+                      y0=y_base, y1=y_base + bar_h, fillcolor="black" if i % 2 == 0 else "white",
+                      line=dict(color="black", width=1), opacity=1, layer="above")
+    lab = dict(xref="x2", yref="y2", y=y_base + bar_h, yanchor="bottom", yshift=1, showarrow=False,
+               font=dict(size=9, color="#222222"))
+    fig.add_annotation(x=x_start, text="0", xanchor="center", **lab)
+    fig.add_annotation(x=x_start + n_seg * seg / 2, text=f"{length_km / 2:g}", xanchor="center", **lab)
+    fig.add_annotation(x=x_start + n_seg * seg, text=f"{length_km:g} km", xanchor="left", xshift=-6, **lab)
 
 
 def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label: str,
@@ -164,6 +187,7 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
         fig.add_trace(go.Scatter(x=[x0, x1, x1, x0, x0], y=[y0, y0, y1, y1, y0], mode="lines",
                                  line=dict(color="#c0612b", width=2), hoverinfo="skip", showlegend=False,
                                  xaxis="x2", yaxis="y2"))
+        _scale_bar(fig, length_km=1000, n_seg=4)
 
     mid_lat = np.deg2rad((y0 + y1) / 2)
     fig.update_layout(
@@ -173,12 +197,13 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
         xaxis=dict(title="Longitude", range=[x0, x1], constrain="domain", domain=[0, 0.72]),
         yaxis=dict(title="Latitude", range=[y0, y1], constrain="domain", scaleanchor="x",
                    scaleratio=1 / np.cos(mid_lat)),
-        xaxis2=dict(domain=[0.76, 0.99], anchor="y2", range=[grids.xll, grids.xright], showticklabels=False,
+        xaxis2=dict(domain=[0.76, 0.99], anchor="y2", range=list(INSET_LON), constrain="domain", showticklabels=False, ticks="",
                     showgrid=False, zeroline=False, showline=True, linecolor="#999999", mirror=True,
                     visible=show_inset),
-        yaxis2=dict(domain=[0.60, 0.98], anchor="x2", range=[grids.yll, grids.ytop], showticklabels=False,
+        yaxis2=dict(domain=[0.60, 0.98], anchor="x2", range=list(INSET_LAT), constrain="domain", constraintoward="top",
+                    showticklabels=False, ticks="",
                     showgrid=False, zeroline=False, showline=True, linecolor="#999999", mirror=True,
-                    scaleanchor="x2", scaleratio=1 / np.cos(np.deg2rad(-27)), visible=show_inset),
+                    scaleanchor="x2", scaleratio=1 / np.cos(np.deg2rad(INSET_REF_LAT)), visible=show_inset),
     )
     return fig
 
