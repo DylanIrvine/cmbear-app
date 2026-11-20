@@ -137,5 +137,5 @@ https://doi.org/10.1016/j.dib.2022.108189
 
 ## Citation and licence
 
-If you use this app, please consider citing the papers above. Code licence: MIT License.
+If you use this app, please consider citing the papers above. Code: copyright (c) 2026 Charles Darwin University, all rights reserved (see `LICENSE`).
 The gridded data retain the licence of their original sources; see Lee et al. (2024).

@@ -196,8 +196,8 @@ with st.expander("**Privacy**"):
         "information about the run attached.\n\n"
         "The app is hosted on Streamlit Community Cloud (Snowflake), so your file passes through their "
         "servers while it is processed, and their own infrastructure is covered by the Streamlit privacy "
-        "notice. To keep your data entirely on your own computer, run the app locally (see the README "
-        "on Source code is on [GitHub](https://github.com/DylanIrvine/cmbear-app)."
+        "notice. To keep your data entirely on your own computer, contact the author about running the "
+        "app locally. The source code can be read on [GitHub](https://github.com/DylanIrvine/cmbear-app)."
     )
 
 # --------------------------------------------------------------------------- #
@@ -594,14 +594,14 @@ For each bore the app locates the 0.05 degree grid cell containing it and extrac
 PET, aridity, the mean annual runoff coefficient (RC) and the chloride deposition statistics from the grids
 of Lee et al. (2024). Two recharge estimates follow.
 
-**Regular chloride mass balance** (Crosbine and Rachakonda,2021; Irvine and Cartwright, 2022):
+**Regular chloride mass balance** (Crosbie and Rachakonda, 2021; Irvine and Cartwright, 2022):
 
 $R = \dfrac{100\,D}{Cl_{gw}}$
 
 with $D$ the mean chloride deposition (kg/ha/y), $Cl_{gw}$ groundwater chloride (mg/L) and $R$ in mm/y.
 The 5th and 95th percentile deposition grids give `R_CMB_5` and `R_CMB_95`.
 
-**Stochastic CMB with a runoff term** (Crosbine and Rachakonda,2021; Lee et al., 2024):
+**Stochastic CMB with a runoff term** (Crosbie and Rachakonda, 2021; Lee et al., 2024):
 
 $R = \dfrac{100\,D\,(1 - \alpha\,RC)}{Cl_{gw}}$
 
