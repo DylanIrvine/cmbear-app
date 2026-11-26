@@ -18,9 +18,13 @@ from cmbear import CMBSettings, load_grids, parse_input, run_cmbear
 from cmbear import run_counter
 from cmbear.cmb import COLUMN_NOTES
 from cmbear.inputs import read_table
-from cmbear.plotting import BERGHUIJS_ALPHA, BERGHUIJS_BETA, berghuijs_curve, bore_map, fit_berghuijs
+from cmbear.maplayers import (MAX_LAYERS, MAX_UPLOAD_MB, POLY_TYPES, TOWN_TYPES, MapError, NeedsCRS, Upload,
+                               layer_paths, read_towns, read_vector, towns_template_bytes)
+from cmbear.plotting import BERGHUIJS_ALPHA, BERGHUIJS_BETA, BG_CMAPS, berghuijs_curve, bore_map, fit_berghuijs
 
 LOGO_DIR = Path(__file__).resolve().parent / "logo"
+# The template download and the example data are the same file.
+EXAMPLE_CSV = Path(__file__).resolve().parent / "examples" / "example_input.csv"
 BADGE, FAVICON = LOGO_DIR / "cmbear_badge.png", LOGO_DIR / "favicon.png"
 
 st.set_page_config(page_title="CMBEAR online", page_icon=str(FAVICON) if FAVICON.exists() else ":droplet:")
@@ -28,7 +32,14 @@ st.set_page_config(page_title="CMBEAR online", page_icon=str(FAVICON) if FAVICON
 thisyear = current_year = str(datetime.now().year)
 
 # Default plot colours (users can override with their own hex codes under 4. Plot options in the sidebar).
-DEFAULT_COLOURS = {"primary": "#0089D0", "secondary": "#6460AA", "reference": "#9a9a9a"}
+DEFAULT_COLOURS = {"primary": "#0089D0", "secondary": "#F37021", "reference": "#9a9a9a"}
+# Map layers: default colours of the up to three polygon or line layers (as in the Hydrochem Workbench)
+LAYER_COLOURS = ["#FCB711", "#0089D0", "#CC004C"]
+for _k in range(MAX_LAYERS):
+    for _key, _val in ((f"opt_map_poly{_k}_edge", LAYER_COLOURS[_k]), (f"opt_map_poly{_k}_face", LAYER_COLOURS[_k]),
+                       (f"opt_map_poly{_k}_alpha", 0.25), (f"opt_map_poly{_k}_width", 1.5),
+                       (f"opt_map_poly{_k}_label", f"Layer {_k + 1}")):
+        st.session_state.setdefault(_key, _val)
 MIME = {"png": "image/png", "svg": "image/svg+xml"}
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # White background on every plot, on screen and in downloads, whatever the app's light/dark theme.
@@ -58,12 +69,8 @@ def grids():
 
 @st.cache_data(show_spinner=False)
 def template_csv() -> bytes:
-    return pd.DataFrame({
-        "ID": ["RN012345", "RN012346", "Bore_A"],
-        "Lat": [-12.4512, -14.6300, -23.7000],
-        "Lon": [130.9820, 132.2000, 133.8700],
-        "Clgw": [12.5, 48.0, 310.0],
-    }).to_csv(index=False).encode()
+    """The template users download, which is also the example data (examples/example_input.csv)."""
+    return EXAMPLE_CSV.read_bytes()
 
 
 def results_xlsx(res, settings, msgs, real, include_real) -> bytes:
@@ -137,6 +144,79 @@ def valid_hex(text, fallback):
     return text if re.fullmatch(r"#[0-9a-fA-F]{6}", text) else fallback
 
 
+def map_layers():
+    """The loaded polygon or line layers with their styles, in order, for bore_map."""
+    ss = st.session_state
+    out = []
+    for k in range(MAX_LAYERS):
+        if ss.get(f"map_poly_{k}"):
+            out.append(dict(paths=ss[f"map_poly_{k}"][1], edge=ss[f"opt_map_poly{k}_edge"],
+                            face=ss[f"opt_map_poly{k}_face"], alpha=ss[f"opt_map_poly{k}_alpha"],
+                            width=ss[f"opt_map_poly{k}_width"], label=ss[f"opt_map_poly{k}_label"] or f"Layer {k + 1}"))
+    return out
+
+
+def read_towns_upload(files, epsg=None):
+    f = files[0]
+    towns = read_towns(io.BytesIO(f.data), f.name)
+    return f"{f.name} ({len(towns)} town(s))", towns
+
+
+def read_layer_upload(files, epsg=None):
+    gdf, info = read_vector(files, epsg=epsg)
+    return info, layer_paths(gdf)
+
+
+def layer_upload(slot, label, types, reader):
+    """One uploaded map layer kept in session_state[slot] as (description, data). A file with no coordinate
+    reference system waits in slot + '_pending' until the user gives an EPSG code. Adapted from the Hydrochem
+    Workbench. Uploaded files stay in this session's memory only."""
+    ss = st.session_state
+    ss.setdefault(slot + "_n", 0)
+    if ss.get(slot):
+        st.markdown(f"**Loaded:** {ss[slot][0]}")
+        if st.button("Remove", key=slot + "_remove"):
+            ss.pop(slot)
+            st.rerun()
+        return
+    pending = ss.get(slot + "_pending")
+    if pending:
+        st.warning(pending[1])
+        epsg = st.number_input("EPSG code of the file (e.g. 28353 for GDA94 / MGA zone 53, 7853 for GDA2020 / "
+                               "MGA zone 53, 4283 for GDA94 latitude and longitude)", min_value=1024,
+                               max_value=99999, value=4326, step=1, key=slot + "_epsg")
+        c1, c2 = st.columns(2)
+        if c1.button("Use this EPSG code", key=slot + "_use"):
+            try:
+                ss[slot] = reader(pending[0], epsg=int(epsg))
+            except MapError as exc:
+                st.error(str(exc))
+            else:
+                ss.pop(slot + "_pending")
+                st.rerun()
+        if c2.button("Cancel", key=slot + "_cancel"):
+            ss.pop(slot + "_pending")
+            st.rerun()
+        return
+    multi = len(types) > 2
+    up = st.file_uploader(label, type=types, accept_multiple_files=multi, key=f"{slot}_up_{ss[slot + '_n']}")
+    files = up if multi else ([up] if up is not None else [])
+    if files:
+        kept = [Upload(f.name, f.getvalue()) for f in files]
+        try:
+            ss[slot] = reader(kept)
+        except NeedsCRS as exc:
+            ss[slot + "_pending"] = (kept, str(exc))
+        except MapError as exc:
+            st.error(str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Could not read that file: {exc}")
+            return
+        ss[slot + "_n"] += 1
+        st.rerun()
+
+
 def export_opts(fig, fmt, width_cm, dpi):
     """Image export options for a figure: laid out DL_LAYOUT_W pixels wide (fonts keep their on-screen
     proportion), then scaled so a PNG has the pixels for the print width at the chosen dpi. A 16 cm figure
@@ -201,7 +281,8 @@ st.markdown(
     "and the stochastic CMBEAR2 recharge with a runoff term, and reads the matching values from the random "
     "forest recharge model of Lee et al. (2024).\n\n"
     
-    "Input: a CSV or Excel file with columns ID, Lat, Lon and Clgw (mg/L). Repeat samples under the same ID are "
+    "Input: a CSV or Excel file with columns for bore ID, latitude, longitude and groundwater chloride (mg/L), "
+    "such as ID, Lat, Lon and Clgw. Repeat samples under the same ID are "
     "averaged, and where there are three or more their standard deviation is used in place of the blanket "
     "coefficient of variation (CV = standard deviation / mean). \n \n"
     
@@ -256,12 +337,22 @@ with st.expander("**Privacy**"):
 bores, msgs, read_error = None, [], None
 with st.sidebar:
     st.header("1. Bore data")
-    st.markdown("Requires the headers: ID, Lat, Lon, Clgw, or download the template as a starting point.")
+    st.markdown("Requires columns for bore ID, latitude, longitude and groundwater chloride (mg/L). Common "
+                "names are recognised (for example ID or bore_id, Lat or latitude, Lon or longitude, Clgw or "
+                "Chloride). Download the template as a starting point.")
     st.download_button("Download template", template_csv(), "cmbear_template.csv", "text/csv")
-    upload = st.file_uploader("Bore spreadsheet (CSV or Excel)", type=["csv", "xlsx", "xls"])
-    if upload is not None:
+    use_example = st.checkbox("Use the template as example data", value=False,
+                              help="Runs the app on the template's bores so you can try it without a file of "
+                                   "your own. Untick to upload your own spreadsheet.")
+    if use_example:
+        source_name, source = "example_input.csv", template_csv()
+        st.caption("Using the example data. Press Calculate recharge under 3. Run.")
+    else:
+        upload = st.file_uploader("Bore spreadsheet (CSV or Excel)", type=["csv", "xlsx", "xls"])
+        source_name, source = (upload.name, upload) if upload is not None else (None, None)
+    if source is not None:
         try:
-            bores, msgs = parse_input(read_table(upload, upload.name))
+            bores, msgs = parse_input(read_table(source, source_name))
         except Exception as e:  # noqa: BLE001
             read_error = f"Could not read the input file: {e}"
             st.error(read_error)
@@ -303,7 +394,8 @@ with st.sidebar:
     st.header("3. Run")
     st.markdown("Not much to be said here. Click the button to run the analysis.")
     if bores is None:
-        st.caption("Upload a bore spreadsheet under 1. Bore data to enable the run.")
+        st.caption("Upload a bore spreadsheet, or tick Use the template as example data, under 1. Bore data "
+                   "to enable the run.")
     run_clicked = st.button("Calculate recharge", type="primary", disabled=bores is None)
 
     st.header("4. Plot options")
@@ -333,7 +425,8 @@ with st.sidebar:
         dl_dpi = st.number_input("Resolution (dpi)", 72, 1200, 400, 50, key="dl_dpi")
 
 if bores is None and read_error is None:
-    st.info("Upload a bore spreadsheet in the sidebar (1. Bore data) to begin.")
+    st.info("Upload a bore spreadsheet in the sidebar (1. Bore data) to begin, or tick **Use the template as "
+            "example data** there to try the app straight away.")
 if bores is not None:
     with st.expander("Preview parsed input"):
         st.dataframe(bores, width="stretch", height=240)
@@ -347,7 +440,7 @@ if run_clicked:
         st.error("The calculation failed for this file. Please check the input values and settings, "
                  "or contact the developer with a description of the problem (not the data).")
     else:
-        st.session_state["run"] = dict(res=res, real=real, settings=settings, msgs=msgs, file=upload.name)
+        st.session_state["run"] = dict(res=res, real=real, settings=settings, msgs=msgs, file=source_name)
         new_total = run_counter.increment_runs()
         if new_total is not None:
             st.session_state["run_count"] = new_total
@@ -355,7 +448,7 @@ if run_clicked:
 run = st.session_state.get("run")
 if run is not None:
     res, real, run_settings = run["res"], run["real"], run["settings"]
-    if run_settings != settings or run["file"] != (upload.name if upload else None):
+    if run_settings != settings or run["file"] != source_name:
         st.caption("Settings or input have changed since the last run. Press Calculate recharge to update.")
 
     bad = res["status"].str.startswith(("outside", "no CMB", "no climate"))
@@ -470,18 +563,57 @@ if run is not None:
     logc = m3.checkbox("Log colour", value=cvar not in ("fill_radius_climate_km", "Rain_mm_y"))
     bgkey = {"Random forest recharge, median": "rf_r50", "Rainfall": "rain", "Land only": None}[bgopt]
     bg_label = {"rf_r50": "Random forest recharge, median (mm/y)", "rain": "Rainfall (mm/y)", None: None}[bgkey]
+    m4, _ = st.columns([2, 3])
+    bg_cmap = m4.selectbox("Background colour map", list(BG_CMAPS), key="map_bg_cmap", disabled=bgkey is None,
+                           help="Colours for the background grid. Greys keeps the bores in front; the others show "
+                                "more detail in the grid. '_r' maps are reversed so that darker is higher.")
     # One colour range for bores and background when they are the same quantity, so shades can be compared.
     shared = (bgkey == "rf_r50" and cvar in RECHARGE_COLS) or (bgkey == "rain" and cvar == "Rain_mm_y")
     with_coords = res[np.isfinite(res["Lat"]) & np.isfinite(res["Lon"])]
+    towns_kept = st.session_state.get("map_towns")
+    layers = map_layers()
     if len(with_coords):
         show(bore_map(with_coords, grids(), cvar, MAP_LABELS[cvar], bgkey, logc, point_colour=C_CMB,
-                      show_ids=show_ids, background_label=bg_label, shared_range=shared),
+                      show_ids=show_ids, background_label=bg_label, shared_range=shared, background_cmap=bg_cmap,
+                      towns=towns_kept[1] if towns_kept else None, layers=layers),
              "cmbear_bore_map")
-        st.caption("Main panel: bores over the chosen grid (greys, darker is higher), each with its own colour bar in "
+        st.caption("Main panel: bores over the chosen grid (darker is higher), each with its own colour bar in "
                    "discrete classes. Cells with no grid value are left white. "
                    + ("Bores and background share one colour range. " if shared else "")
                    + "Inset: Australia with the main panel's extent outlined; scale bar true at 27°S. Bores without a result are still "
-                     "plotted; hover for status.")
+                     "plotted; hover for status. Towns and polygon or line layers can be added below.")
+
+    # Fixed expander titles: a title that changes (e.g. with a count) makes a new element, which closes it
+    with st.expander("**Towns**"):
+        st.write("A csv with the columns Name, Lat and Lon (decimal degrees). Towns inside the map extent are "
+                 "drawn as black squares with their name.")
+        st.download_button("Download the towns template", towns_template_bytes(), "cmbear_towns_template.csv",
+                           "text/csv")
+        layer_upload("map_towns", "Upload the towns file", TOWN_TYPES, read_towns_upload)
+
+    with st.expander("**Polygons and lines**",
+                     expanded=any(st.session_state.get(f"map_poly_{k}_pending") for k in range(MAX_LAYERS))):
+        st.write(f"Up to {MAX_LAYERS} layers of polygons or lines, for example a basin boundary, rivers or roads. "
+                 "Each is a shapefile as a .zip or as its separate files (.shp, .shx, .dbf and .prj together), a "
+                 f"GeoPackage, GeoJSON or KML, up to {MAX_UPLOAD_MB} MB, and is converted to latitude and longitude "
+                 "from whatever coordinate reference system the file states. Layer 1 is drawn first, with the "
+                 "others on top, all beneath the bores. Lines take the edge colour.")
+        loaded = [bool(st.session_state.get(f"map_poly_{k}")) for k in range(MAX_LAYERS)]
+        for k in range(MAX_LAYERS):
+            # the loaded layers, and one empty slot after them
+            if not (loaded[k] or all(loaded[:k])):
+                continue
+            st.markdown(f"**Layer {k + 1}**")
+            layer_upload(f"map_poly_{k}", f"Upload the file(s) for layer {k + 1}", POLY_TYPES, read_layer_upload)
+            if loaded[k]:
+                c1, c2, c3 = st.columns(3)
+                c1.color_picker("Edge colour", key=f"opt_map_poly{k}_edge")
+                c2.color_picker("Fill colour", key=f"opt_map_poly{k}_face")
+                c3.slider("Fill opacity (alpha)", 0.0, 1.0, step=0.05, key=f"opt_map_poly{k}_alpha",
+                          help="0 is no fill (outline only), 1 is solid. Not used for lines.")
+                c1, c2 = st.columns(2)
+                c1.slider("Edge width", 0.5, 5.0, step=0.25, key=f"opt_map_poly{k}_width")
+                c2.text_input("Name in the legend", key=f"opt_map_poly{k}_label")
 
     st.subheader("Stochastic CMB versus random forest recharge")
     logax = st.checkbox("Log axes", value=True, key="log1")

@@ -17,6 +17,9 @@ the app
    national grid with an Australia inset, CMB vs RF, recharge vs climate, and the per-bore realisation
    histogram. Each plot has a Download figure button (PNG or SVG at a chosen print width and dpi), and
    Download everything gives one zip with the Excel results and every figure as currently set up.
+   The map's background grid can use one of several colour maps, and a towns csv and up to three
+   polygon or line layers (shapefile, GeoPackage, GeoJSON or KML) can be added, as in the Hydrochem
+   Workbench.
 
 Inputs, settings, the run button and plot options are in the sidebar (1. Bore data, 2. Settings,
 3. Run, 4. Plot options); results, downloads and plots are on the main page.
@@ -32,7 +35,8 @@ cmbear/                 Calculation package (no Streamlit dependency)
   grids.py              Grid archive loading and pixel lookup
   inputs.py             Spreadsheet parsing, column aliases, QA
   cmb.py                Regular and stochastic CMB, RF extraction, gap filling
-  plotting.py           Bore map (plotly)
+  plotting.py           Plotly figures: bore map, recharge fraction fit
+  maplayers.py          Towns and polygon/line layers for the map (geopandas)
 data/grids.npz          15 national grids, float32, compressed (13.6 MB)
 scripts/build_grids.py  Rebuilds data/grids.npz from the Lee et al. (2024) ASCII grids
 examples/               Example input file

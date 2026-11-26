@@ -8,7 +8,26 @@ import plotly.graph_objects as go
 from .grids import GridStack
 
 GREYS = [[0, "#f7f7f7"], [1, "#8c8c8c"]]          # muted background ramp (land data)
-DEFAULT_POINT = "#e0812b"                         # end colour of the single-hue ramp for the bore colour variable
+# Background (grid) colour maps. Stops sampled from matplotlib at 17 even steps and stored here so the app
+# does not need matplotlib. "Greys" is the app's original muted grey ramp.
+BG_CMAPS = {
+    "Greys": ["#f7f7f7", "#8c8c8c"],
+    "Purples": ["#fcfbfd", "#f5f4f9", "#efedf5", "#e4e3f0", "#dadaeb", "#cbcbe3", "#bcbddc", "#adabd2", "#9e9ac8",
+            "#8e8bc1", "#807cba", "#7566ae", "#6950a3", "#5e3b98", "#53268f", "#491285", "#3f007d"],
+    "Greens": ["#f7fcf5", "#eef8ea", "#e5f5e0", "#d6efd0", "#c7e9c0", "#b4e1ad", "#a0d99b", "#8ace88", "#73c476",
+            "#5ab769", "#40aa5d", "#319a50", "#228a44", "#117b38", "#006c2c", "#005723", "#00441b"],
+    "BuPu": ["#f7fcfd", "#ebf4f8", "#e0ecf4", "#cfdfed", "#bfd3e6", "#aec7e0", "#9ebcda", "#95a8d0", "#8c95c6",
+            "#8c80bb", "#8c6ab1", "#8a55a7", "#88409c", "#84278c", "#800f7b", "#650762", "#4d004b"],
+    "afmhot_r": ["#ffffff", "#ffffdf", "#ffffbf", "#ffff9f", "#fffe7f", "#ffde5f", "#ffbe3f", "#ff9e1f", "#fe7e00",
+            "#de5e00", "#be3f00", "#9e1f00", "#7e0000", "#5e0000", "#3e0000", "#1e0000", "#000000"],
+    "copper_r": ["#ffc77f", "#ffbb77", "#ffae6f", "#ffa267", "#ec955f", "#d88957", "#c47c4f", "#b17047", "#9d633f",
+            "#895737", "#754a2f", "#623e27", "#4e311f", "#3a2517", "#26180f", "#130c07", "#000000"],
+    "gist_earth_r": ["#fdfbfb", "#ebd1cb", "#d9b59d", "#c7a676", "#bcac62", "#b2b65d", "#98af58", "#7da853", "#5ba04b",
+            "#429650", "#3b8d63", "#338477", "#2a727e", "#1f577b", "#153778", "#0a1275", "#000000"],
+    "cubehelix_r": ["#ffffff", "#e2f6f0", "#cae7f0", "#c1cff3", "#c7b2ed", "#d297d2", "#d383a6", "#c37a73", "#9f7948",
+            "#6f7b31", "#417731", "#22693f", "#15524c", "#17364c", "#1b1c3a", "#140a1b", "#000000"],
+}
+DEFAULT_POINT = "#0089D0"                         # end colour of the single-hue ramp for the bore colour variable
 OCEAN = "#dfe9f3"
 INSET_LON, INSET_LAT = (112.0, 154.0), (-44.0, -10.0)   # Australia inset extent (degrees)
 MAP_NOMINAL_W = 640       # px; figure height is set so the main panel fills the full height at this width or wider
@@ -57,11 +76,27 @@ def _class_edges(lo: float, hi: float, log: bool) -> np.ndarray:
     return np.arange(e0, e1 + step / 2, step)
 
 
-def _discrete(edges: np.ndarray, c0: str, c1: str):
+def _rgba(hex_colour: str, alpha: float) -> str:
+    h = hex_colour.lstrip("#")
+    return "rgba(%d,%d,%d,%.3f)" % (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
+
+
+def _stops_ramp(stops: list[str], n: int) -> list[str]:
+    """n colours evenly spaced along a colour map given as a list of hex stops (piecewise linear in RGB)."""
+    if len(stops) == 2:
+        return _hex_ramp(stops[0], stops[1], n)
+    rgb = np.array([[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in stops], float)
+    t = np.linspace(0, 1, n) if n > 1 else np.array([1.0])
+    pos = np.linspace(0, 1, len(stops))
+    out = np.stack([np.interp(t, pos, rgb[:, k]) for k in range(3)], axis=1)
+    return ["#%02x%02x%02x" % tuple(np.round(c).astype(int)) for c in out]
+
+
+def _discrete(edges: np.ndarray, stops: list[str]):
     """Stepped plotly colourscale for the classes between edges (uneven widths allowed), and its colour range."""
     zmin, zmax = float(edges[0]), float(edges[-1])
     n = len(edges) - 1
-    cols = _hex_ramp(c0, c1, n)
+    cols = _stops_ramp(stops, n)
     pos = (edges - zmin) / (zmax - zmin)
     scale = []
     for i, c in enumerate(cols):
@@ -99,13 +134,19 @@ def _scale_bar(fig: go.Figure, length_km: float = 1000, n_seg: int = 4, x_start:
 def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label: str,
              background: str | None = "rf_r50", log_colour: bool = True, pad_frac: float = 0.15,
              point_colour: str = DEFAULT_POINT, show_ids: bool = False, background_label: str | None = None,
-             shared_range: bool = False) -> go.Figure:
+             shared_range: bool = False, background_cmap: str = "Greys", towns: pd.DataFrame | None = None,
+             layers: list[dict] | None = None) -> go.Figure:
     """Map of bores coloured by one result column over a grey grid, with an Australia inset.
 
     background: key of a grid to show in greys (None for land/sea only), with its own colour bar.
     shared_range: put bores and background on one colour range (use when both are the same quantity and units,
     e.g. CMB recharge over random forest recharge), so their shades can be compared.
     log_colour applies to both the bores and, when shared or a random forest grid, the background.
+    background_cmap: a key of BG_CMAPS for the background grid.
+    towns: optional table with Name, Lat, Lon; towns inside the main panel are drawn as labelled squares.
+    layers: optional polygon or line layers, each a dict with paths (from maplayers.layer_paths), edge, face,
+    alpha, width and label. Drawn in order over the background and under the bores.
+    Towns and layers are named in a legend below the map.
     The main panel's extent is the bounding box of the bores with padding (at least 0.5 degrees).
     The figure has a white page background and is meant to be drawn with Streamlit's theme switched off.
     """
@@ -163,8 +204,8 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
     p_edges = _class_edges(p_lo, p_hi, log_colour)
     b_edges = p_edges if (background and shared_range) else _class_edges(b_lo, b_hi, bg_log)
     # Ramp from a pale tint of the bore colour (about 8% of the way from white) to the colour itself.
-    p_scale, p_lo, p_hi = _discrete(p_edges, _hex_ramp("#ffffff", point_colour, 13)[1], point_colour)
-    b_scale, b_lo, b_hi = _discrete(b_edges, GREYS[0][1], GREYS[1][1])
+    p_scale, p_lo, p_hi = _discrete(p_edges, [_hex_ramp("#ffffff", point_colour, 13)[1], point_colour])
+    b_scale, b_lo, b_hi = _discrete(b_edges, BG_CMAPS.get(background_cmap, BG_CMAPS["Greys"]))
 
     # Colour bars sit under the inset, side by side (bores, then background), titles rotated alongside.
     frac = ((x1 - x0) * (y1 - y0)) / ((grids.xright - grids.xll) * (grids.ytop - grids.yll))
@@ -183,8 +224,19 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
         colorbar=dict(title=dict(text=background_label or (background or ""), side="right",
                                  font=dict(size=11, color="#222222")),
                       x=0.885, **cb_common, **_edge_ticks(b_edges, bg_log)) if has_bg_bar else None))
+    # Polygon and line layers, in order, over the background and under the bores
+    for layer in layers or []:
+        (px, py), (lx, ly) = layer["paths"]
+        if px:
+            fig.add_trace(go.Scatter(
+                x=px, y=py, mode="lines", fill="toself", name=layer["label"], hoverinfo="skip",
+                fillcolor=_rgba(layer["face"], layer["alpha"]), line=dict(color=layer["edge"], width=layer["width"])))
+        if lx:
+            fig.add_trace(go.Scatter(x=lx, y=ly, mode="lines", name=layer["label"], hoverinfo="skip",
+                                     showlegend=not px, line=dict(color=layer["edge"], width=layer["width"])))
+
     fig.add_trace(go.Scatter(
-        x=ok["Lon"], y=ok["Lat"], mode="markers+text" if show_ids else "markers", name="Bores",
+        x=ok["Lon"], y=ok["Lat"], mode="markers+text" if show_ids else "markers", name="Bores", showlegend=False,
         text=ok["ID"].astype(str), textposition="top right", textfont=dict(size=10, color="#222222"),
         marker=dict(color=cvals, colorscale=p_scale, cmin=p_lo, cmax=p_hi, size=9,
                     line=dict(width=1, color="#333333"),
@@ -193,6 +245,22 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
         customdata=np.stack([ok["ID"], vals, ok["status"]], axis=1),
         hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]:.3g}<br>lat %{y:.4f}, lon %{x:.4f}"
                       "<br>%{customdata[2]}<extra></extra>"))
+
+    # Towns inside the main panel: black squares, names to the right (to the left near the right edge)
+    n_towns = 0
+    if towns is not None and len(towns):
+        t = towns[(towns["Lon"] >= x0) & (towns["Lon"] <= x1) & (towns["Lat"] >= y0) & (towns["Lat"] <= y1)]
+        n_towns = len(t)
+        if n_towns:
+            right_edge = t["Lon"] > x0 + 0.8 * (x1 - x0)
+            fig.add_trace(go.Scatter(
+                x=t["Lon"], y=t["Lat"], mode="markers+text", name="Town", text=t["Name"],
+                textposition=np.where(right_edge, "middle left", "middle right").tolist(),
+                textfont=dict(size=11, color="black", shadow="1px 1px 1px white, -1px -1px 1px white, "
+                                                            "1px -1px 1px white, -1px 1px 1px white"),
+                marker=dict(symbol="square", size=7, color="black", line=dict(color="white", width=1)),
+                hovertemplate="<b>%{text}</b><extra></extra>"))
+    has_legend = n_towns > 0 or bool(layers)
 
     # Australia inset with the main-panel bounding box (omitted when the panel already shows most of it)
     small, fs = _downsample(land.astype(float), 180)
@@ -216,10 +284,14 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
     # vertically and the alignment loosens.
     panel_w = MAP_X_DOMAIN * (MAP_NOMINAL_W - MAP_MARGIN["l"] - MAP_MARGIN["r"])
     panel_h = panel_w * (y1 - y0) / np.cos(mid_lat) / (x1 - x0)
-    fig_h = int(np.floor(panel_h)) + MAP_MARGIN["t"] + MAP_MARGIN["b"]
+    # A legend for towns and layers sits in a strip below the longitude label
+    margin = dict(MAP_MARGIN, b=MAP_MARGIN["b"] + (30 if has_legend else 0))
+    fig_h = int(np.floor(panel_h)) + margin["t"] + margin["b"]
     fig.update_layout(
-        template="simple_white", height=fig_h, margin=MAP_MARGIN,
-        paper_bgcolor="white", plot_bgcolor="white", showlegend=False,
+        template="simple_white", height=fig_h, margin=margin,
+        paper_bgcolor="white", plot_bgcolor="white", showlegend=has_legend,
+        legend=dict(orientation="h", yref="container", y=0, yanchor="bottom", x=0, xanchor="left",
+                    font=dict(size=11, color="#222222"), bgcolor="rgba(255,255,255,0)"),
         font=dict(color="#222222"),
         xaxis=dict(title="Longitude", range=[x0, x1], constrain="domain", domain=[0, MAP_X_DOMAIN]),
         yaxis=dict(title="Latitude", range=[y0, y1], domain=[0, 1], constrain="domain", scaleanchor="x",
