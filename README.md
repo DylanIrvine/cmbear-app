@@ -13,8 +13,13 @@ the app
 3. computes the stochastic CMBEAR2 recharge with a runoff term, R = 100 D (1 - alpha RC) / Cl_gw,
    over 1000 realisations and reports the 5th, 50th, 95th percentiles and the mean;
 4. reads the random forest recharge (R5, R50, R95) and recharge/rainfall (RP5, RP50, RP95) grids;
-5. offers CSV and Excel downloads and four sets of plots: a bore map over the national grid with an
-   Australia inset, CMB vs RF, recharge vs climate, and the per-bore realisation histogram.
+5. offers CSV and Excel downloads and interactive plots: recharge by bore, a bore map over the
+   national grid with an Australia inset, CMB vs RF, recharge vs climate, and the per-bore realisation
+   histogram. Each plot has a Download figure button (PNG or SVG at a chosen print width and dpi), and
+   Download everything gives one zip with the Excel results and every figure as currently set up.
+
+Inputs, settings, the run button and plot options are in the sidebar (1. Bore data, 2. Settings,
+3. Run, 4. Plot options); results, downloads and plots are on the main page.
 
 Results reproduce `CMBEAR2_v1.0.py` to float32 precision for the same inputs (see
 `tests/` and the Method and notes section of the app for the documented differences).
@@ -44,6 +49,11 @@ streamlit run app.py
 ```
 
 Then open http://localhost:8501 and upload `examples/example_input.csv`.
+
+Figure downloads are rendered on the server by kaleido, which needs Chrome or Chromium. If neither is
+installed, run `plotly_get_chrome` once after installing the requirements (it downloads a copy for
+kaleido). Without it the app still runs; the figure buttons are disabled and the camera icon in each
+plot's toolbar still saves images.
 
 Tests: `python -m pytest tests`
 
@@ -119,8 +129,8 @@ to stay on their own machine should run the app locally (see Run locally).
 1. Push this repository to GitHub (public).
 2. Sign in at https://share.streamlit.io with GitHub, choose **Create app**, select the repository,
    branch `main` and `app.py` as the entry point.
-3. Deploy. The app reads `requirements.txt` and `.streamlit/config.toml` automatically; no secrets
-   are needed.
+3. Deploy. The app reads `requirements.txt`, `packages.txt` (Chromium, for figure downloads) and
+   `.streamlit/config.toml` automatically; no secrets are needed.
 
 ## References
 

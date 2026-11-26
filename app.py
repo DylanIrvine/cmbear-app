@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import io
 import re
+import tempfile
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 import streamlit as st
 
 from cmbear import CMBSettings, load_grids, parse_input, run_cmbear
@@ -24,8 +27,10 @@ st.set_page_config(page_title="CMBEAR online", page_icon=str(FAVICON) if FAVICON
 
 thisyear = current_year = str(datetime.now().year)
 
-# Default plot colours (users can override with their own hex codes under Plot colours).
-DEFAULT_COLOURS = {"primary": "#4a90c2", "secondary": "#e0812b", "reference": "#9a9a9a"}
+# Default plot colours (users can override with their own hex codes under 4. Plot options in the sidebar).
+DEFAULT_COLOURS = {"primary": "#0089D0", "secondary": "#6460AA", "reference": "#9a9a9a"}
+MIME = {"png": "image/png", "svg": "image/svg+xml"}
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # White background on every plot, on screen and in downloads, whatever the app's light/dark theme.
 PLOT_LAYOUT = dict(template="plotly_white", paper_bgcolor="white", plot_bgcolor="white",
                    font=dict(size=13, color="#222222"), margin=dict(l=60, r=20, t=50, b=70))
@@ -132,6 +137,51 @@ def valid_hex(text, fallback):
     return text if re.fullmatch(r"#[0-9a-fA-F]{6}", text) else fallback
 
 
+def export_opts(fig, fmt, width_cm, dpi):
+    """Image export options for a figure: laid out DL_LAYOUT_W pixels wide (fonts keep their on-screen
+    proportion), then scaled so a PNG has the pixels for the print width at the chosen dpi. A 16 cm figure
+    at 400 dpi is about 2520 pixels wide. SVG is vector, so it is not scaled."""
+    fmt = fmt.lower()
+    scale = 1.0 if fmt == "svg" else width_cm / 2.54 * dpi / DL_LAYOUT_W
+    return dict(format=fmt, width=DL_LAYOUT_W, height=int(fig.layout.height or 500), scale=scale)
+
+
+@st.cache_resource(show_spinner="Checking figure export...")
+def export_available() -> bool:
+    """True if kaleido and a Chrome/Chromium browser are available to render figures on the server."""
+    try:
+        go.Figure().to_image(format="png", width=40, height=40)
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def figure_bytes(fig, opts):
+    """Deferred download data: rendered only when the button is clicked."""
+    return lambda: fig.to_image(**opts)
+
+
+def everything_zip(items, xlsx):
+    """Deferred download data for the zip: the results spreadsheet plus every figure as drawn.
+
+    items: list of (file stem, figure, export options). Figures are rendered in one batch, which is much
+    faster than one at a time because the browser is started once."""
+    def build():
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("cmbear_results.xlsx", xlsx)
+            if items:
+                with tempfile.TemporaryDirectory() as tmp:
+                    paths = [Path(tmp) / f"{n}.{o['format']}" for n, _, o in items]
+                    pio.write_images([f for _, f, _ in items], paths,
+                                     format=[o["format"] for *_, o in items], width=[o["width"] for *_, o in items],
+                                     height=[o["height"] for *_, o in items], scale=[o["scale"] for *_, o in items])
+                    for p in paths:
+                        z.write(p, f"figures/{p.name}")
+        return buf.getvalue()
+    return build
+
+
 # --------------------------------------------------------------------------- #
 # header
 # --------------------------------------------------------------------------- #
@@ -201,68 +251,94 @@ with st.expander("**Privacy**"):
     )
 
 # --------------------------------------------------------------------------- #
-# 1. bore data
+# sidebar: 1. bore data, 2. settings, 3. run, 4. plot options
 # --------------------------------------------------------------------------- #
-st.header("1. Bore data")
-st.markdown("Requires the headers: ID, Lat, Lon, Clgw, or download the template as a starting point.")
-col_up, col_tpl = st.columns([3, 1], vertical_alignment="bottom")
-upload = col_up.file_uploader("Bore spreadsheet (CSV or Excel)", type=["csv", "xlsx", "xls"])
-col_tpl.download_button("Download template", template_csv(), "cmbear_template.csv", "text/csv", width="stretch")
+bores, msgs, read_error = None, [], None
+with st.sidebar:
+    st.header("1. Bore data")
+    st.markdown("Requires the headers: ID, Lat, Lon, Clgw, or download the template as a starting point.")
+    st.download_button("Download template", template_csv(), "cmbear_template.csv", "text/csv")
+    upload = st.file_uploader("Bore spreadsheet (CSV or Excel)", type=["csv", "xlsx", "xls"])
+    if upload is not None:
+        try:
+            bores, msgs = parse_input(read_table(upload, upload.name))
+        except Exception as e:  # noqa: BLE001
+            read_error = f"Could not read the input file: {e}"
+            st.error(read_error)
+        else:
+            for m in msgs:
+                st.caption(m)
 
-bores, msgs = None, []
-if upload is not None:
-    try:
-        bores, msgs = parse_input(read_table(upload, upload.name))
-    except Exception as e:  # noqa: BLE001
-        st.error(f"Could not read the input file: {e}")
-    else:
-        for m in msgs:
-            st.caption(m)
-        with st.expander("Preview parsed input"):
-            st.dataframe(bores, width="stretch", height=240)
+    st.header("2. Settings")
+    st.markdown("Update any of the other optional parameters here.")
+    cv = st.slider("Cl_gw coefficient of variation", 0.05, 1.00, 0.37, 0.01,
+                   help="Applied to groundwater chloride for bores with fewer than three samples. 0.37 is the "
+                        "national value derived from bores with more than 10 samples in Lee et al. (2024).")
+    n_real = st.select_slider("Realisations per bore", [250, 500, 1000, 2000, 5000], value=1000)
+    a_lo, a_hi = st.slider("Runoff factor alpha range", 0.0, 1.0, (0.33, 0.66), 0.01,
+                           help="Fraction of the runoff coefficient that removes chloride. Lee et al. used "
+                                "U(0.33, 0.66).")
+    with st.expander("Cells without climate or RC data"):
+        st.caption("1853 coastal and island cells have chloride deposition but no rainfall, PET, aridity or runoff "
+                   "coefficient; 6400 land cells have no random forest value.")
+        fill_method = st.radio("Handling", list(FILL_LABELS),
+                               help="Averages the valid cells in a 3 x 3 window around the bore; if none, the window "
+                                    "grows one ring at a time up to the maximum. The window size used is recorded.")
+        fill_max = st.slider("Maximum window radius (cells)", 1, 10, 2, 1,
+                             help="2 cells is a 5 x 5 window, about 11 km across.")
+        fill_rc = st.number_input("Assumed RC when no data", 0.0, 1.0, 0.0, 0.01, format="%.2f")
+        fill_rf = st.checkbox("Fill RF values too", value=True)
 
-# --------------------------------------------------------------------------- #
-# 2. settings
-# --------------------------------------------------------------------------- #
-st.header("2. Settings")
-st.markdown("Update any of the other optional parameters here.")
-c1, c2, c3 = st.columns(3)
-cv = c1.slider("Cl_gw coefficient of variation", 0.05, 1.00, 0.37, 0.01,
-               help="Applied to groundwater chloride for bores with fewer than three samples. 0.37 is the national "
-                    "value derived from bores with more than 10 samples in Lee et al. (2024).")
-n_real = c2.select_slider("Realisations per bore", [250, 500, 1000, 2000, 5000], value=1000)
-a_lo, a_hi = c3.slider("Runoff factor alpha range", 0.0, 1.0, (0.33, 0.66), 0.01,
-                       help="Fraction of the runoff coefficient that removes chloride. Lee et al. used U(0.33, 0.66).")
-with st.expander("Cells without climate or RC data"):
-    st.caption("1853 coastal and island cells have chloride deposition but no rainfall, PET, aridity or runoff "
-               "coefficient; 6400 land cells have no random forest value.")
-    fill_method = st.radio("Handling", list(FILL_LABELS), horizontal=True,
-                           help="Averages the valid cells in a 3 x 3 window around the bore; if none, the window grows "
-                                "one ring at a time up to the maximum. The window size used is recorded.")
-    f1, f2, f3 = st.columns(3)
-    fill_max = f1.slider("Maximum window radius (cells)", 1, 10, 2, 1, help="2 cells is a 5 x 5 window, about 11 km across.")
-    fill_rc = f2.number_input("Assumed RC when no data", 0.0, 1.0, 0.0, 0.01, format="%.2f")
-    fill_rf = f3.checkbox("Fill RF values too", value=True)
+    with st.expander("Advanced"):
+        seed_d = st.number_input("Seed (deposition)", value=1, step=1)
+        seed_c = st.number_input("Seed (Cl_gw)", value=3100, step=1)
+        seed_a = st.number_input("Seed (alpha)", value=2, step=1)
+        keep_real = st.checkbox("Keep realisations (needed for the histogram and Excel export)", value=True)
 
-with st.expander("Advanced"):
-    s1, s2, s3 = st.columns(3)
-    seed_d = s1.number_input("Seed (deposition)", value=1, step=1)
-    seed_c = s2.number_input("Seed (Cl_gw)", value=3100, step=1)
-    seed_a = s3.number_input("Seed (alpha)", value=2, step=1)
-    keep_real = st.checkbox("Keep realisations (needed for the histogram and Excel export)", value=True)
+    settings = CMBSettings(n_realisations=int(n_real), cv_clgw=cv, alpha_low=a_lo, alpha_high=a_hi,
+                           seed_deposition=int(seed_d), seed_clgw=int(seed_c), seed_alpha=int(seed_a),
+                           keep_realisations=keep_real, fill_method=FILL_LABELS[fill_method],
+                           fill_max_cells=int(fill_max), fill_rc_value=float(fill_rc), fill_rf=fill_rf)
 
-settings = CMBSettings(n_realisations=int(n_real), cv_clgw=cv, alpha_low=a_lo, alpha_high=a_hi, seed_deposition=int(seed_d), seed_clgw=int(seed_c),
-                       seed_alpha=int(seed_a), keep_realisations=keep_real, fill_method=FILL_LABELS[fill_method],
-                       fill_max_cells=int(fill_max), fill_rc_value=float(fill_rc), fill_rf=fill_rf)
+    st.header("3. Run")
+    st.markdown("Not much to be said here. Click the button to run the analysis.")
+    if bores is None:
+        st.caption("Upload a bore spreadsheet under 1. Bore data to enable the run.")
+    run_clicked = st.button("Calculate recharge", type="primary", disabled=bores is None)
 
-# --------------------------------------------------------------------------- #
-# 3. run
-# --------------------------------------------------------------------------- #
-st.header("3. Run")
-st.markdown("Not much to be said here. Click the button to run the analysis.")
-if bores is None:
-    st.info("Upload a bore spreadsheet in section 1 to enable the run.")
-if st.button("Calculate recharge", type="primary", disabled=bores is None):
+    st.header("4. Plot options")
+    with st.expander("Plot colours"):
+        st.caption("Enter hex codes (for example your organisation's colours). Primary is used for CMB results, "
+                   "secondary for random forest values, reference for 1:1 lines and percentile markers.")
+        C_CMB = valid_hex(st.text_input("Primary", DEFAULT_COLOURS["primary"]), DEFAULT_COLOURS["primary"])
+        C_RF = valid_hex(st.text_input("Secondary", DEFAULT_COLOURS["secondary"]), DEFAULT_COLOURS["secondary"])
+        C_LINE = valid_hex(st.text_input("Reference", DEFAULT_COLOURS["reference"]), DEFAULT_COLOURS["reference"])
+        st.markdown("".join(f'<div style="background:{c};height:14px;border-radius:3px;margin-bottom:4px"></div>'
+                            for c in (C_CMB, C_RF, C_LINE)), unsafe_allow_html=True)
+    with st.expander("Axes and labels"):
+        axis_cap = st.number_input("Maximum recharge shown on axes (mm/y)", 10.0, 100000.0, 2000.0, 100.0,
+                                   help="Axes showing recharge are limited to this value. Larger estimates, usually "
+                                        "from very low chloride, are clipped from view but remain in the results.")
+        show_ids = st.checkbox("Label markers with bore IDs", value=False,
+                               help="Adds the ID beside each marker on the map and scatter plots. Best for small "
+                                    "numbers of bores; labels can overlap when many are plotted.")
+    with st.expander("Figure downloads"):
+        st.caption("Used by the download button under each plot, the Download everything zip and the camera "
+                   "icon at the top right of each plot.")
+        dl_fmt = st.selectbox("Format", ["PNG", "SVG"], key="dl_fmt",
+                              help="SVG is vector, so it is sharp at any size and dpi does not apply.")
+        dl_cm = st.number_input("Print width (cm)", 5.0, 40.0, 16.0, 0.5, key="dl_cm",
+                                help="Width the figure will be printed at. With dpi this sets the pixel size "
+                                     "of PNG downloads.")
+        dl_dpi = st.number_input("Resolution (dpi)", 72, 1200, 400, 50, key="dl_dpi")
+
+if bores is None and read_error is None:
+    st.info("Upload a bore spreadsheet in the sidebar (1. Bore data) to begin.")
+if bores is not None:
+    with st.expander("Preview parsed input"):
+        st.dataframe(bores, width="stretch", height=240)
+
+if run_clicked:
     # Caught so that an unexpected failure is not written to the server log as a traceback,
     # which could quote values from the user's file. Nothing about the input is logged.
     try:
@@ -289,9 +365,9 @@ if run is not None:
     filled = res["status"].str.contains("mean of cells|assumed", regex=True)
     if filled.any():
         st.info(f"{int(filled.sum())} bore(s) sit on cells without climate/RC or RF data and were filled as set "
-                "in section 2. See status and the fill_radius columns.")
+                "under 2. Settings in the sidebar. See status and the fill_radius columns.")
 
-    st.subheader("Results")
+    st.header("Results")
     st.dataframe(res, width="stretch", height=360)
     ok_all = res[res["status"].str.startswith("ok")]
     if len(ok_all):
@@ -301,64 +377,53 @@ if run is not None:
             st.dataframe(summ.apply(lambda c: c.map(lambda v: f"{v:.3g}")), width="stretch")
 
     # ----------------------------------------------------------------------- #
-    # 4. downloads
+    # downloads
     # ----------------------------------------------------------------------- #
-    st.header("4. Downloads")
+    st.header("Downloads")
     d1, d2, d3 = st.columns([1, 1, 1], vertical_alignment="center")
     d1.download_button("Results (CSV)", res.to_csv(index=False).encode(), "cmbear_results.csv", "text/csv",
                        width="stretch")
     inc = d3.checkbox("Include realisations in Excel", value=False,
-                      help="Adds a sheet with every realisation (bores x realisations). Can be large.")
-    d2.download_button("Results (Excel)", results_xlsx(res, run_settings, run["msgs"], real, inc),
-                       "cmbear_results.xlsx",
-                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
+                      help="Adds a sheet with every realisation (bores x realisations). Can be large. "
+                           "Also applies to the Excel file in Download everything.")
+    xlsx_bytes = results_xlsx(res, run_settings, run["msgs"], real, inc)
+    d2.download_button("Results (Excel)", xlsx_bytes, "cmbear_results.xlsx", XLSX_MIME, width="stretch")
 
     # ----------------------------------------------------------------------- #
-    # 5. plots
+    # plots
     # ----------------------------------------------------------------------- #
-    st.header("5. Plots")
+    st.header("Plots")
+    st.markdown(
+        "**These plots are interactive.** Hover over a marker or bar to read its values, drag a box to zoom, "
+        "double-click to reset the view, and click a legend entry to hide or show that series. The toolbar "
+        "at the top right of each plot appears when the mouse is over it.\n\n"
+        "The **Download figure** button under each plot saves the whole figure as it is set up here, at the "
+        "format, print width and resolution under *4. Plot options* in the sidebar. It does not keep a zoom "
+        "or hidden series; to save the current zoomed view use the camera icon in the plot's toolbar instead.")
     ok = ok_all.reset_index()
-
-    with st.expander("Plot colours"):
-        st.caption("Enter hex codes (for example your organisation's colours). Primary is used for CMB results, "
-                   "secondary for random forest values, reference for 1:1 lines and percentile markers.")
-        pc1, pc2, pc3 = st.columns(3)
-        C_CMB = valid_hex(pc1.text_input("Primary", DEFAULT_COLOURS["primary"]), DEFAULT_COLOURS["primary"])
-        C_RF = valid_hex(pc2.text_input("Secondary", DEFAULT_COLOURS["secondary"]), DEFAULT_COLOURS["secondary"])
-        C_LINE = valid_hex(pc3.text_input("Reference", DEFAULT_COLOURS["reference"]), DEFAULT_COLOURS["reference"])
-        sw1, sw2, sw3 = st.columns(3)
-        for col, c in zip((sw1, sw2, sw3), (C_CMB, C_RF, C_LINE)):
-            col.markdown(f'<div style="background:{c};height:14px;border-radius:3px"></div>', unsafe_allow_html=True)
-
-    with st.expander("Advanced plot options"):
-        axis_cap = st.number_input("Maximum recharge shown on axes (mm/y)", 10.0, 100000.0, 2000.0, 100.0,
-                                   help="Axes showing recharge are limited to this value. Larger estimates, usually "
-                                        "from very low chloride, are clipped from view but remain in the results.")
-        show_ids = st.checkbox("Label markers with bore IDs", value=False,
-                               help="Adds the ID beside each marker on the map and scatter plots. Best for small "
-                                    "numbers of bores; labels can overlap when many are plotted.")
-        st.markdown("**Figure downloads** (camera icon at the top right of each plot)")
-        dl1, dl2, dl3 = st.columns(3)
-        dl_fmt = dl1.selectbox("Format", ["PNG", "SVG"], key="dl_fmt",
-                               help="SVG is vector, so it is sharp at any size and dpi does not apply.")
-        dl_cm = dl2.number_input("Print width (cm)", 5.0, 40.0, 16.0, 0.5, key="dl_cm",
-                                 help="Width the figure will be printed at. With dpi this sets the pixel size "
-                                      "of PNG downloads.")
-        dl_dpi = dl3.number_input("Resolution (dpi)", 72, 1200, 400, 50, key="dl_dpi")
     label_mode = "markers+text" if show_ids else "markers"
+    can_export = export_available()
+    if not can_export:
+        st.warning("Figure files cannot be made on this server (kaleido or Chrome/Chromium is missing), so the "
+                   "Download figure buttons and the figures in Download everything are unavailable. The camera "
+                   "icon in each plot's toolbar still works.")
+    fig_items = []   # (file stem, figure, export options) for every figure drawn, for Download everything
 
     def show(fig, name, **kw):
-        """Draw a figure; its download button saves at the chosen print width and dpi.
+        """Draw a figure with a Download figure button beneath it, and record it for Download everything.
 
-        The figure is laid out at DL_LAYOUT_W pixels wide for export (fonts keep their on-screen proportion)
-        and scaled up, so a 16 cm figure at 400 dpi is about 2520 pixels wide.
+        Downloads (button, zip and camera icon) are laid out DL_LAYOUT_W pixels wide and scaled to the chosen
+        print width and dpi (see export_opts). The button's image is rendered only when it is clicked.
         """
-        h = int(fig.layout.height or 500)
-        scale = dl_cm / 2.54 * dl_dpi / DL_LAYOUT_W
-        cfg = dict(displaylogo=False, toImageButtonOptions=dict(
-            format=dl_fmt.lower(), filename=name, width=DL_LAYOUT_W, height=h, scale=scale))
+        brand(fig)
+        opts = export_opts(fig, dl_fmt, dl_cm, dl_dpi)
+        cfg = dict(displaylogo=False, toImageButtonOptions=dict(filename=name, **opts))
         kw.setdefault("theme", None)   # Streamlit's theme would replace the white background in dark mode
-        st.plotly_chart(brand(fig), width="stretch", config=cfg, **kw)
+        st.plotly_chart(fig, width="stretch", config=cfg, **kw)
+        st.download_button(f"Download figure ({dl_fmt})", figure_bytes(fig, opts), f"{name}.{opts['format']}",
+                           MIME[opts["format"]], key=f"dl_{name}", disabled=not can_export, on_click="ignore",
+                           icon=":material/download:")
+        fig_items.append((name, fig, opts))
     label_font = dict(size=10)
 
     st.subheader("Recharge by bore")
@@ -538,7 +603,7 @@ if run is not None:
 
     st.subheader("Recharge distribution for one bore")
     if real is None:
-        st.info("Enable 'Keep realisations' under Advanced to see per-bore distributions.")
+        st.info("Enable 'Keep realisations' under 2. Settings > Advanced in the sidebar to see per-bore distributions.")
     elif len(ok):
         h1, h2 = st.columns([3, 1], vertical_alignment="bottom")
         bid = h1.selectbox("Bore", ok["ID"].tolist())
@@ -584,6 +649,23 @@ if run is not None:
                    f"median {r['R_RC_50_mm_y']:.3g} mm/y. The gap between them reflects the right tail that comes from "
                    "low-chloride realisations.")
 
+    # ----------------------------------------------------------------------- #
+    # download everything
+    # ----------------------------------------------------------------------- #
+    st.header("Download everything")
+    st.markdown(
+        "One zip file with the results spreadsheet (as the Results (Excel) button above, including the "
+        "realisations sheet if that box is ticked) and every figure on this page with its current settings "
+        f"(estimate, order, axes, colours and labels), as {dl_fmt} at the print width and resolution under "
+        "*4. Plot options*. Figures are made when the button is clicked, which takes a few seconds.")
+    with st.expander(f"Files in the zip ({1 + len(fig_items) if can_export else 1})"):
+        st.markdown("- cmbear_results.xlsx\n" + ("\n".join(f"- figures/{n}.{o['format']}" for n, _, o in fig_items)
+                                                 if can_export else "- (no figures: figure export unavailable)"))
+    zip_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", Path(run["file"]).stem) or "results"
+    st.download_button("Download everything (.zip)", everything_zip(fig_items if can_export else [], xlsx_bytes),
+                       f"cmbear_{zip_stem}.zip", "application/zip", type="primary", on_click="ignore",
+                       icon=":material/folder_zip:")
+
 # --------------------------------------------------------------------------- #
 # method and notes
 # --------------------------------------------------------------------------- #
@@ -627,7 +709,7 @@ recharge (R5, R50, R95, mm/y) and recharge divided by rainfall (RP5, RP50, RP95)
 - 1853 land cells (coastal fringe and islands) have chloride deposition but no climate or RC data, and
   6400 land cells have no RF value. The app either averages the valid cells in a 3 x 3 window around the
   bore, widening the window one ring at a time up to a chosen maximum and recording the window used, or
-  uses an assumed RC with climate left blank, as chosen in section 2.
+  uses an assumed RC with climate left blank, as chosen under 2. Settings.
 - Points lying exactly on a cell boundary are assigned to the northern/western cell deterministically.
   Otherwise pixel selection and random streams are identical, and results match the original to float32
   precision.

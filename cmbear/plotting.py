@@ -162,7 +162,8 @@ def bore_map(res: pd.DataFrame, grids: GridStack, colour_var: str, colour_label:
     # Discrete classes with round boundaries; shared ranges get identical boundaries.
     p_edges = _class_edges(p_lo, p_hi, log_colour)
     b_edges = p_edges if (background and shared_range) else _class_edges(b_lo, b_hi, bg_log)
-    p_scale, p_lo, p_hi = _discrete(p_edges, "#fbf3ea", point_colour)
+    # Ramp from a pale tint of the bore colour (about 8% of the way from white) to the colour itself.
+    p_scale, p_lo, p_hi = _discrete(p_edges, _hex_ramp("#ffffff", point_colour, 13)[1], point_colour)
     b_scale, b_lo, b_hi = _discrete(b_edges, GREYS[0][1], GREYS[1][1])
 
     # Colour bars sit under the inset, side by side (bores, then background), titles rotated alongside.
